@@ -14,7 +14,13 @@ const credentialsSchema = z.object({
   password: z.string().min(8),
 });
 
-const isGoogleProviderEnabled = Boolean(env.GOOGLE_CLIENT_ID && env.GOOGLE_CLIENT_SECRET);
+const googleClientId = env.GOOGLE_CLIENT_ID;
+const googleClientSecret = env.GOOGLE_CLIENT_SECRET;
+const googleProvider =
+  googleClientId && googleClientSecret
+    ? GoogleProvider({ clientId: googleClientId, clientSecret: googleClientSecret })
+    : null;
+const isGoogleProviderEnabled = Boolean(googleProvider);
 if (!isGoogleProviderEnabled && process.env.NODE_ENV === "development") {
   console.warn(
     "[auth][warn] Google provider disabled. Set AUTH_GOOGLE_ID and AUTH_GOOGLE_SECRET to enable it.",
@@ -88,14 +94,7 @@ export const authOptions: NextAuthOptions = {
         };
       },
     }),
-    ...(isGoogleProviderEnabled
-      ? [
-          GoogleProvider({
-            clientId: env.GOOGLE_CLIENT_ID,
-            clientSecret: env.GOOGLE_CLIENT_SECRET,
-          }),
-        ]
-      : []),
+    ...(googleProvider ? [googleProvider] : []),
   ],
   callbacks: {
     jwt({ token, user }) {
