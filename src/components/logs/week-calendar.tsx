@@ -64,6 +64,49 @@ function xToDayIndex(clientX: number, columnRects: (DOMRect | null)[], fallback:
   return fallback;
 }
 
+function computeOverlapLayout(
+  items: { id: string; start: number; end: number }[],
+): Map<string, { column: number; columnCount: number }> {
+  const layout = new Map<string, { column: number; columnCount: number }>();
+  const sorted = [...items].sort((a, b) => a.start - b.start || a.end - b.end);
+
+  let cluster: typeof sorted = [];
+  let clusterEnd = -Infinity;
+
+  const flushCluster = () => {
+    if (cluster.length === 0) return;
+    const columnEnds: number[] = [];
+    const columnByItem = new Map<string, number>();
+    for (const item of cluster) {
+      let column = columnEnds.findIndex((end) => end <= item.start);
+      if (column === -1) {
+        column = columnEnds.length;
+        columnEnds.push(item.end);
+      } else {
+        columnEnds[column] = item.end;
+      }
+      columnByItem.set(item.id, column);
+    }
+    const columnCount = columnEnds.length;
+    for (const item of cluster) {
+      layout.set(item.id, { column: columnByItem.get(item.id)!, columnCount });
+    }
+    cluster = [];
+    clusterEnd = -Infinity;
+  };
+
+  for (const item of sorted) {
+    if (cluster.length > 0 && item.start >= clusterEnd) {
+      flushCluster();
+    }
+    cluster.push(item);
+    clusterEnd = Math.max(clusterEnd, item.end);
+  }
+  flushCluster();
+
+  return layout;
+}
+
 type DragKind = "move" | "resize-top" | "resize-bottom";
 
 type Draft = {
@@ -378,22 +421,36 @@ export function WeekCalendar({
                 />
               ))}
 
-              {logs
-                .filter((entry) => getDisplayForEntry(entry).dayIndex === dayIndex)
-                .map((entry) => {
-                  const display = getDisplayForEntry(entry);
+              {(() => {
+                const dayEntries = logs
+                  .map((entry) => ({ entry, display: getDisplayForEntry(entry) }))
+                  .filter(({ display }) => display.dayIndex === dayIndex);
+                const layout = computeOverlapLayout(
+                  dayEntries.map(({ entry, display }) => ({
+                    id: entry.id,
+                    start: display.startMinutes,
+                    end: Math.max(display.startMinutes + MIN_DURATION_MINUTES, display.endMinutes),
+                  })),
+                );
+                return dayEntries.map(({ entry, display }) => {
                   const durationMinutes = Math.max(MIN_DURATION_MINUTES, display.endMinutes - display.startMinutes);
                   const top = (display.startMinutes / 60) * SLOT_HEIGHT;
                   const height = (durationMinutes / 60) * SLOT_HEIGHT;
                   const isDragging = draft?.id === entry.id;
+                  const position = layout.get(entry.id) ?? { column: 0, columnCount: 1 };
+                  const widthPercent = 100 / position.columnCount;
+                  const leftPercent = widthPercent * position.column;
 
                   return (
                     <div
                       key={entry.id}
-                      className="absolute left-1 right-1 z-10 rounded-[8px] border border-[#D0FF00] bg-[#2f3716] p-1 text-[10px]"
+                      className="absolute rounded-[8px] border border-[#D0FF00] bg-[#2f3716] p-1 text-[10px]"
                       style={{
                         top,
                         height,
+                        left: `calc(${leftPercent}% + 2px)`,
+                        width: `calc(${widthPercent}% - 4px)`,
+                        zIndex: isDragging ? 20 : 10,
                         touchAction: "none",
                         userSelect: "none",
                         WebkitUserSelect: "none",
@@ -451,7 +508,8 @@ export function WeekCalendar({
                       {isDragging && <div className="pointer-events-none absolute inset-0 rounded-[8px] ring-2 ring-[#D0FF00]" />}
                     </div>
                   );
-                })}
+                });
+              })()}
             </div>
           ))}
         </div>
