@@ -15,6 +15,14 @@ Google OAuth callback URL for local dev:
 
 - `http://localhost:3000/api/auth/callback/google`
 
+Google Calendar integration callback URL for local dev:
+
+- `http://localhost:3000/api/integrations/google-calendar/callback`
+
+Enable the Google Calendar API for the OAuth project and register both callback URLs.
+Calendar access is requested separately from sign-in when the user selects
+`Connect Google Calendar` in Money.
+
 ## Setup
 
 1. `npm install`

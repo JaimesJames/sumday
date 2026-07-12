@@ -1,8 +1,11 @@
 import { sql } from "drizzle-orm";
 import {
+  bigint,
   boolean,
+  date,
   index,
   integer,
+  pgEnum,
   pgTable,
   primaryKey,
   text,
@@ -11,6 +14,11 @@ import {
   uuid,
   varchar,
 } from "drizzle-orm/pg-core";
+
+export const moneyKindEnum = pgEnum("money_kind", ["income", "expense"]);
+export const moneyCategoryKindEnum = pgEnum("money_category_kind", ["income", "expense", "both"]);
+export const commitmentFrequencyEnum = pgEnum("commitment_frequency", ["once", "weekly", "monthly", "yearly"]);
+export const commitmentStatusEnum = pgEnum("commitment_status", ["active", "paused", "completed"]);
 
 export const users = pgTable("users", {
   id: uuid("id").defaultRandom().primaryKey(),
@@ -134,6 +142,97 @@ export const timeLogs = pgTable(
     oneRunningTimerPerUser: uniqueIndex("time_logs_one_running_per_user")
       .on(log.userId)
       .where(sql`${log.isRunning} = true`),
+  }),
+);
+
+export const moneyCategories = pgTable(
+  "money_categories",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+    name: varchar("name", { length: 80 }).notNull(),
+    kind: moneyCategoryKindEnum("kind").default("both").notNull(),
+    color: varchar("color", { length: 20 }).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (category) => ({
+    userNameUnique: uniqueIndex("money_categories_user_name_unique").on(category.userId, category.name),
+    userIdIdx: index("money_categories_user_id_idx").on(category.userId),
+  }),
+);
+
+export const moneyCommitments = pgTable(
+  "money_commitments",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+    categoryId: uuid("category_id").notNull().references(() => moneyCategories.id, { onDelete: "restrict" }),
+    name: varchar("name", { length: 140 }).notNull(),
+    kind: moneyKindEnum("kind").notNull(),
+    amountMinor: bigint("amount_minor", { mode: "number" }).notNull(),
+    currency: varchar("currency", { length: 3 }).default("THB").notNull(),
+    firstDueOn: date("first_due_on", { mode: "string" }).notNull(),
+    frequency: commitmentFrequencyEnum("frequency").notNull(),
+    installmentCount: integer("installment_count"),
+    remainingInstallments: integer("remaining_installments"),
+    endsOn: date("ends_on", { mode: "string" }),
+    status: commitmentStatusEnum("status").default("active").notNull(),
+    note: text("note"),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (commitment) => ({
+    upcomingIdx: index("money_commitments_upcoming_idx").on(commitment.userId, commitment.status, commitment.firstDueOn),
+  }),
+);
+
+export const moneyTransactions = pgTable(
+  "money_transactions",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+    categoryId: uuid("category_id").notNull().references(() => moneyCategories.id, { onDelete: "restrict" }),
+    commitmentId: uuid("commitment_id").references(() => moneyCommitments.id, { onDelete: "set null" }),
+    kind: moneyKindEnum("kind").notNull(),
+    amountMinor: bigint("amount_minor", { mode: "number" }).notNull(),
+    currency: varchar("currency", { length: 3 }).default("THB").notNull(),
+    occurredOn: date("occurred_on", { mode: "string" }).notNull(),
+    note: text("note"),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (transaction) => ({
+    occurredIdx: index("money_transactions_occurred_idx").on(transaction.userId, transaction.occurredOn),
+  }),
+);
+
+export const calendarConnections = pgTable("calendar_connections", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  userId: uuid("user_id").notNull().unique().references(() => users.id, { onDelete: "cascade" }),
+  calendarId: text("calendar_id"),
+  accessToken: text("access_token"),
+  refreshToken: text("refresh_token"),
+  expiresAt: integer("expires_at"),
+  scopes: text("scopes"),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+});
+
+export const calendarEventLinks = pgTable(
+  "calendar_event_links",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+    commitmentId: uuid("commitment_id").notNull().references(() => moneyCommitments.id, { onDelete: "cascade" }),
+    occurrenceOn: date("occurrence_on", { mode: "string" }).notNull(),
+    providerEventId: text("provider_event_id").notNull(),
+    contentHash: varchar("content_hash", { length: 64 }).notNull(),
+    lastSyncedAt: timestamp("last_synced_at", { withTimezone: true }).defaultNow().notNull(),
+    lastError: text("last_error"),
+  },
+  (link) => ({
+    occurrenceUnique: uniqueIndex("calendar_event_links_occurrence_unique").on(link.commitmentId, link.occurrenceOn),
   }),
 );
 

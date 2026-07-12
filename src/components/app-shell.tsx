@@ -1,6 +1,6 @@
 "use client";
 
-import { BarChart3, LayoutDashboard, Logs, Settings } from "lucide-react";
+import { BarChart3, LayoutDashboard, Logs, Settings, WalletCards } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { ReactNode } from "react";
@@ -9,6 +9,7 @@ import { SignOutButton } from "@/components/sign-out-button";
 const navItems = [
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
   { href: "/logs", label: "Logging", icon: Logs },
+  { href: "/money", label: "Money", icon: WalletCards },
   { href: "/categories", label: "Categories", icon: BarChart3 },
   { href: "/settings", label: "Setting", icon: Settings },
 ];
