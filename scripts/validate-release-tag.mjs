@@ -1,6 +1,6 @@
 import { appendFileSync } from "node:fs";
 
-const tag = process.env.GITHUB_REF_NAME || process.argv[2];
+const tag = process.argv[2] || process.env.GITHUB_REF_NAME;
 const match = /^PRD\/v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.exec(
   tag ?? "",
 );
