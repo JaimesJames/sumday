@@ -2,7 +2,7 @@
 
 import { addDays, addMinutes, differenceInMinutes, format, startOfDay } from "date-fns";
 import { Plus, Square } from "lucide-react";
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { createCalendarSlotAction, stopTimerAction, updateLogAction } from "@/app/(protected)/actions";
 import { Button } from "@/components/ui/button";
 import {
@@ -101,8 +101,21 @@ export function WeekCalendar({
   const [mode, setMode] = useState<"instant" | "running">("instant");
   const [editingLogId, setEditingLogId] = useState<string | null>(null);
   const [draft, setDraft] = useState<Draft | null>(null);
+  const draftRef = useRef<Draft | null>(null);
   const gestureRef = useRef<Gesture | null>(null);
   const dayColRefs = useRef<(HTMLDivElement | null)[]>([]);
+  const gestureCleanupRef = useRef<(() => void) | null>(null);
+
+  function updateDraft(next: Draft | null) {
+    draftRef.current = next;
+    setDraft(next);
+  }
+
+  useEffect(() => {
+    return () => {
+      gestureCleanupRef.current?.();
+    };
+  }, []);
 
   const weekStart = useMemo(() => new Date(weekStartIso), [weekStartIso]);
   const weekDays = useMemo(() => Array.from({ length: 7 }, (_, index) => addDays(weekStart, index)), [weekStart]);
@@ -147,16 +160,42 @@ export function WeekCalendar({
     await updateLogAction(formData);
   }
 
+  function applyGestureMove(gesture: Gesture, clientX: number, clientY: number) {
+    const dx = clientX - gesture.startX;
+    const dy = clientY - gesture.startY;
+    if (!gesture.moved && Math.hypot(dx, dy) < 4) return;
+    gesture.moved = true;
+
+    const deltaMinutes = snapMinutes(((clientY - gesture.startY) / SLOT_HEIGHT) * 60);
+
+    if (gesture.kind === "move") {
+      const duration = gesture.originEndMinutes - gesture.originStartMinutes;
+      const startMinutes = clamp(gesture.originStartMinutes + deltaMinutes, 0, 1440 - duration);
+      const dayIndex = xToDayIndex(clientX, gesture.columnRects, gesture.originDayIndex);
+      updateDraft({ id: gesture.entry.id, dayIndex, startMinutes, endMinutes: startMinutes + duration });
+    } else if (gesture.kind === "resize-bottom") {
+      const endMinutes = clamp(
+        gesture.originEndMinutes + deltaMinutes,
+        gesture.originStartMinutes + MIN_DURATION_MINUTES,
+        1440,
+      );
+      updateDraft({ id: gesture.entry.id, dayIndex: gesture.originDayIndex, startMinutes: gesture.originStartMinutes, endMinutes });
+    } else {
+      const startMinutes = clamp(
+        gesture.originStartMinutes + deltaMinutes,
+        0,
+        gesture.originEndMinutes - MIN_DURATION_MINUTES,
+      );
+      updateDraft({ id: gesture.entry.id, dayIndex: gesture.originDayIndex, startMinutes, endMinutes: gesture.originEndMinutes });
+    }
+  }
+
   function beginGesture(event: React.PointerEvent<HTMLElement>, entry: CalendarLog, kind: DragKind) {
     event.stopPropagation();
-    try {
-      event.currentTarget.setPointerCapture(event.pointerId);
-    } catch {
-      // Some pointer sources don't support capture; drag still works via bubbling.
-    }
+    event.preventDefault();
     const display = getDisplayForEntry(entry);
     const columnRects = dayColRefs.current.map((el) => el?.getBoundingClientRect() ?? null);
-    gestureRef.current = {
+    const gesture: Gesture = {
       pointerId: event.pointerId,
       entry,
       kind,
@@ -168,59 +207,44 @@ export function WeekCalendar({
       originEndMinutes: display.endMinutes,
       columnRects,
     };
-  }
+    gestureRef.current = gesture;
 
-  function handleGestureMove(event: React.PointerEvent<HTMLElement>) {
-    const gesture = gestureRef.current;
-    if (!gesture || event.pointerId !== gesture.pointerId) return;
-    const dx = event.clientX - gesture.startX;
-    const dy = event.clientY - gesture.startY;
-    if (!gesture.moved && Math.hypot(dx, dy) < 4) return;
-    gesture.moved = true;
-
-    const deltaMinutes = snapMinutes(((event.clientY - gesture.startY) / SLOT_HEIGHT) * 60);
-
-    if (gesture.kind === "move") {
-      const duration = gesture.originEndMinutes - gesture.originStartMinutes;
-      const startMinutes = clamp(gesture.originStartMinutes + deltaMinutes, 0, 1440 - duration);
-      const dayIndex = xToDayIndex(event.clientX, gesture.columnRects, gesture.originDayIndex);
-      setDraft({ id: gesture.entry.id, dayIndex, startMinutes, endMinutes: startMinutes + duration });
-    } else if (gesture.kind === "resize-bottom") {
-      const endMinutes = clamp(
-        gesture.originEndMinutes + deltaMinutes,
-        gesture.originStartMinutes + MIN_DURATION_MINUTES,
-        1440,
-      );
-      setDraft({ id: gesture.entry.id, dayIndex: gesture.originDayIndex, startMinutes: gesture.originStartMinutes, endMinutes });
-    } else {
-      const startMinutes = clamp(
-        gesture.originStartMinutes + deltaMinutes,
-        0,
-        gesture.originEndMinutes - MIN_DURATION_MINUTES,
-      );
-      setDraft({ id: gesture.entry.id, dayIndex: gesture.originDayIndex, startMinutes, endMinutes: gesture.originEndMinutes });
-    }
-  }
-
-  async function handleGestureEnd(event: React.PointerEvent<HTMLElement>) {
-    const gesture = gestureRef.current;
-    if (!gesture || event.pointerId !== gesture.pointerId) return;
-    try {
-      event.currentTarget.releasePointerCapture(event.pointerId);
-    } catch {
-      // No-op if capture was never established.
-    }
-    gestureRef.current = null;
-
-    if (!draft || draft.id !== gesture.entry.id) {
-      setDraft(null);
-      setEditingLogId(gesture.entry.id);
-      return;
+    // Track on window, not the entry element: moving the block to a different
+    // day column unmounts/remounts its DOM node (different parent in the JSX
+    // tree), which would silently kill pointer capture/listeners bound to it.
+    function onWindowMove(nativeEvent: PointerEvent) {
+      if (nativeEvent.pointerId !== gesture.pointerId) return;
+      applyGestureMove(gesture, nativeEvent.clientX, nativeEvent.clientY);
     }
 
-    const { dayIndex, startMinutes, endMinutes } = draft;
-    setDraft(null);
-    await commitLogChange(gesture.entry, dayIndex, startMinutes, endMinutes);
+    function cleanup() {
+      window.removeEventListener("pointermove", onWindowMove);
+      window.removeEventListener("pointerup", onWindowUp);
+      window.removeEventListener("pointercancel", onWindowUp);
+      gestureCleanupRef.current = null;
+    }
+
+    function onWindowUp(nativeEvent: PointerEvent) {
+      if (nativeEvent.pointerId !== gesture.pointerId) return;
+      cleanup();
+      gestureRef.current = null;
+
+      const finalDraft = draftRef.current;
+      if (!finalDraft || finalDraft.id !== gesture.entry.id) {
+        updateDraft(null);
+        setEditingLogId(gesture.entry.id);
+        return;
+      }
+
+      const { dayIndex, startMinutes, endMinutes } = finalDraft;
+      updateDraft(null);
+      void commitLogChange(gesture.entry, dayIndex, startMinutes, endMinutes);
+    }
+
+    window.addEventListener("pointermove", onWindowMove);
+    window.addEventListener("pointerup", onWindowUp);
+    window.addEventListener("pointercancel", onWindowUp);
+    gestureCleanupRef.current = cleanup;
   }
 
   return (
@@ -307,7 +331,10 @@ export function WeekCalendar({
         </Dialog>
       </div>
 
-      <div className="min-h-0 flex-1 overflow-auto rounded-[12px] border border-[#3a3a3a]">
+      <div
+        className="min-h-0 flex-1 overflow-auto rounded-[12px] border border-[#3a3a3a]"
+        style={draft ? { userSelect: "none", WebkitUserSelect: "none" } : undefined}
+      >
         <div className="grid min-w-[980px]" style={{ gridTemplateColumns: "70px repeat(7, minmax(0,1fr))" }}>
           <div className="border-r border-[#3f3f3f]" />
           {weekDays.map((day) => (
@@ -364,7 +391,14 @@ export function WeekCalendar({
                     <div
                       key={entry.id}
                       className="absolute left-1 right-1 z-10 rounded-[8px] border border-[#D0FF00] bg-[#2f3716] p-1 text-[10px]"
-                      style={{ top, height, touchAction: "none", cursor: entry.isRunning ? "pointer" : "grab" }}
+                      style={{
+                        top,
+                        height,
+                        touchAction: "none",
+                        userSelect: "none",
+                        WebkitUserSelect: "none",
+                        cursor: entry.isRunning ? "pointer" : "grab",
+                      }}
                       onClick={(event) => {
                         event.stopPropagation();
                         if (entry.isRunning) setEditingLogId(entry.id);
@@ -374,8 +408,6 @@ export function WeekCalendar({
                           ? undefined
                           : (event) => beginGesture(event, entry, "move")
                       }
-                      onPointerMove={entry.isRunning ? undefined : handleGestureMove}
-                      onPointerUp={entry.isRunning ? undefined : handleGestureEnd}
                     >
                       <div className="mb-1 flex items-center justify-between gap-1">
                         <span className="truncate font-semibold" style={{ color: entry.categoryColor }}>
@@ -406,17 +438,13 @@ export function WeekCalendar({
                         <>
                           <div
                             className="absolute inset-x-0 top-0 h-2"
-                            style={{ cursor: "ns-resize", touchAction: "none" }}
+                            style={{ cursor: "ns-resize", touchAction: "none", userSelect: "none", WebkitUserSelect: "none" }}
                             onPointerDown={(event) => beginGesture(event, entry, "resize-top")}
-                            onPointerMove={handleGestureMove}
-                            onPointerUp={handleGestureEnd}
                           />
                           <div
                             className="absolute inset-x-0 bottom-0 h-2"
-                            style={{ cursor: "ns-resize", touchAction: "none" }}
+                            style={{ cursor: "ns-resize", touchAction: "none", userSelect: "none", WebkitUserSelect: "none" }}
                             onPointerDown={(event) => beginGesture(event, entry, "resize-bottom")}
-                            onPointerMove={handleGestureMove}
-                            onPointerUp={handleGestureEnd}
                           />
                         </>
                       )}
