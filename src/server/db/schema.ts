@@ -116,9 +116,9 @@ export const timeLogs = pgTable(
     userId: uuid("user_id")
       .notNull()
       .references(() => users.id, { onDelete: "cascade" }),
-    categoryId: uuid("category_id")
-      .notNull()
-      .references(() => categories.id, { onDelete: "restrict" }),
+    categoryId: uuid("category_id").references(() => categories.id, {
+      onDelete: "restrict",
+    }),
     title: varchar("title", { length: 140 }),
     note: text("note"),
     startedAt: timestamp("started_at", { withTimezone: true }).notNull(),

@@ -31,7 +31,7 @@ export async function getDashboardSummary(userId: string, timeZone: string) {
       categoryColor: categories.color,
     })
     .from(timeLogs)
-    .innerJoin(categories, eq(categories.id, timeLogs.categoryId))
+    .leftJoin(categories, eq(categories.id, timeLogs.categoryId))
     .where(
       and(
         eq(timeLogs.userId, userId),
@@ -45,8 +45,8 @@ export async function getDashboardSummary(userId: string, timeZone: string) {
   const breakdownMap = new Map<string, { color: string; seconds: number }>();
 
   for (const log of logs) {
-    const key = log.categoryName;
-    const prev = breakdownMap.get(key) ?? { color: log.categoryColor, seconds: 0 };
+    const key = log.categoryName ?? "No category";
+    const prev = breakdownMap.get(key) ?? { color: log.categoryColor ?? "#7f7f7f", seconds: 0 };
     prev.seconds += log.durationSeconds ?? 0;
     breakdownMap.set(key, prev);
   }

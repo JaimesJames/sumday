@@ -1,0 +1,1 @@
+ALTER TABLE "time_logs" ALTER COLUMN "category_id" DROP NOT NULL;

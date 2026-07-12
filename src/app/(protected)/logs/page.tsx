@@ -66,12 +66,11 @@ export default async function LogsPage({ searchParams }: LogsPageProps) {
             />
             <select
               name="categoryId"
-              required
               aria-label="Category"
               defaultValue=""
               className="h-8 min-w-[120px] rounded-[10px] border border-[#3a3a3a] bg-[#2B2B2B] px-2 text-sm text-[#d7d7d7] outline-none"
             >
-              <option value="">Select category</option>
+              <option value="">No category</option>
               {categories.map((category) => (
                 <option key={category.id} value={category.id}>
                   {category.name}
@@ -97,8 +96,8 @@ export default async function LogsPage({ searchParams }: LogsPageProps) {
               endedAt: log.endedAt ? log.endedAt.toISOString() : null,
               isRunning: log.isRunning,
               categoryId: log.categoryId,
-              categoryName,
-              categoryColor,
+              categoryName: categoryName ?? "No category",
+              categoryColor: categoryColor ?? "#7f7f7f",
             }))}
           />
         </CardContent>

@@ -46,7 +46,8 @@ export default async function DashboardPage() {
         <CardContent>
           <form action={startTimerAction} className="space-y-3">
             <Label>Category</Label>
-            <select name="categoryId" required className="w-full rounded-md border bg-white px-3 py-2 text-sm">
+            <select name="categoryId" defaultValue="" className="w-full rounded-md border bg-white px-3 py-2 text-sm">
+              <option value="">No category</option>
               {categories.map((category) => (
                 <option key={category.id} value={category.id}>
                   {category.name}
@@ -84,10 +85,12 @@ export default async function DashboardPage() {
           {summary.recentLogs.map((log) => (
             <div key={log.id} className="flex items-center justify-between rounded-xl border bg-white p-3">
               <div>
-                <p className="font-medium">{log.title || log.categoryName}</p>
+                <p className="font-medium">{log.title || log.categoryName || "Untitled"}</p>
                 <p className="text-sm text-slate-500">{format(log.startedAt, "PPP p")}</p>
               </div>
-              <Badge style={{ backgroundColor: log.categoryColor }}>{log.categoryName}</Badge>
+              <Badge style={{ backgroundColor: log.categoryColor ?? "#7f7f7f" }}>
+                {log.categoryName ?? "No category"}
+              </Badge>
             </div>
           ))}
         </CardContent>

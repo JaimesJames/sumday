@@ -1,9 +1,9 @@
 "use client";
 
-import { addDays, differenceInMinutes, format, startOfDay } from "date-fns";
+import { addDays, addMinutes, differenceInMinutes, format, startOfDay } from "date-fns";
 import { Plus, Square } from "lucide-react";
-import { useMemo, useState } from "react";
-import { createCalendarSlotAction, stopTimerAction } from "@/app/(protected)/actions";
+import { useMemo, useRef, useState } from "react";
+import { createCalendarSlotAction, stopTimerAction, updateLogAction } from "@/app/(protected)/actions";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -14,20 +14,21 @@ import {
   DialogTrigger,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { EditLogDialog } from "@/components/logs/edit-log-dialog";
 
-type CalendarCategory = {
+export type CalendarCategory = {
   id: string;
   name: string;
   color: string;
 };
 
-type CalendarLog = {
+export type CalendarLog = {
   id: string;
   title: string | null;
   startedAt: string;
   endedAt: string | null;
   isRunning: boolean;
-  categoryId: string;
+  categoryId: string | null;
   categoryName: string;
   categoryColor: string;
 };
@@ -35,6 +36,55 @@ type CalendarLog = {
 const HOUR_LABELS = Array.from({ length: 24 }, (_, hour) => `${String(hour).padStart(2, "0")}:00`);
 const SLOT_HEIGHT = 40;
 const DAY_HEIGHT = SLOT_HEIGHT * 24;
+const SNAP_MINUTES = 15;
+const MIN_DURATION_MINUTES = 15;
+
+function clamp(value: number, min: number, max: number) {
+  return Math.min(Math.max(value, min), max);
+}
+
+function snapMinutes(raw: number) {
+  return Math.round(raw / SNAP_MINUTES) * SNAP_MINUTES;
+}
+
+function yToMinutes(offsetY: number) {
+  const raw = (offsetY / SLOT_HEIGHT) * 60;
+  return clamp(snapMinutes(raw), 0, 1440);
+}
+
+function xToDayIndex(clientX: number, columnRects: (DOMRect | null)[], fallback: number) {
+  for (let index = 0; index < columnRects.length; index += 1) {
+    const rect = columnRects[index];
+    if (rect && clientX >= rect.left && clientX < rect.right) return index;
+  }
+  const first = columnRects.find((rect) => rect !== null) ?? null;
+  const last = [...columnRects].reverse().find((rect) => rect !== null) ?? null;
+  if (first && clientX < first.left) return 0;
+  if (last && clientX >= last.right) return columnRects.length - 1;
+  return fallback;
+}
+
+type DragKind = "move" | "resize-top" | "resize-bottom";
+
+type Draft = {
+  id: string;
+  dayIndex: number;
+  startMinutes: number;
+  endMinutes: number;
+};
+
+type Gesture = {
+  pointerId: number;
+  entry: CalendarLog;
+  kind: DragKind;
+  startX: number;
+  startY: number;
+  moved: boolean;
+  originDayIndex: number;
+  originStartMinutes: number;
+  originEndMinutes: number;
+  columnRects: (DOMRect | null)[];
+};
 
 export function WeekCalendar({
   weekStartIso,
@@ -49,9 +99,16 @@ export function WeekCalendar({
   const [selectedStart, setSelectedStart] = useState(`${format(new Date(), "yyyy-MM-dd")}T09:00`);
   const [selectedEnd, setSelectedEnd] = useState(`${format(new Date(), "yyyy-MM-dd")}T10:00`);
   const [mode, setMode] = useState<"instant" | "running">("instant");
+  const [editingLogId, setEditingLogId] = useState<string | null>(null);
+  const [draft, setDraft] = useState<Draft | null>(null);
+  const gestureRef = useRef<Gesture | null>(null);
+  const dayColRefs = useRef<(HTMLDivElement | null)[]>([]);
+
   const weekStart = useMemo(() => new Date(weekStartIso), [weekStartIso]);
   const weekDays = useMemo(() => Array.from({ length: 7 }, (_, index) => addDays(weekStart, index)), [weekStart]);
   const now = new Date();
+
+  const editingLog = logs.find((entry) => entry.id === editingLogId) ?? null;
 
   const openCreateSlot = (slotDate: Date) => {
     const startValue = format(slotDate, "yyyy-MM-dd'T'HH:mm");
@@ -61,6 +118,110 @@ export function WeekCalendar({
     setMode("instant");
     setOpen(true);
   };
+
+  function getDisplayForEntry(entry: CalendarLog) {
+    if (draft && draft.id === entry.id) {
+      return { dayIndex: draft.dayIndex, startMinutes: draft.startMinutes, endMinutes: draft.endMinutes };
+    }
+    const start = new Date(entry.startedAt);
+    const end = entry.endedAt ? new Date(entry.endedAt) : now;
+    const dayKey = format(start, "yyyy-MM-dd");
+    const dayIndex = weekDays.findIndex((day) => format(day, "yyyy-MM-dd") === dayKey);
+    return {
+      dayIndex: dayIndex === -1 ? 0 : dayIndex,
+      startMinutes: differenceInMinutes(start, startOfDay(start)),
+      endMinutes: differenceInMinutes(end, startOfDay(start)),
+    };
+  }
+
+  async function commitLogChange(entry: CalendarLog, dayIndex: number, startMinutes: number, endMinutes: number) {
+    const dayDate = weekDays[dayIndex];
+    const startedAt = addMinutes(startOfDay(dayDate), startMinutes);
+    const endedAt = addMinutes(startOfDay(dayDate), endMinutes);
+    const formData = new FormData();
+    formData.set("id", entry.id);
+    if (entry.categoryId) formData.set("categoryId", entry.categoryId);
+    if (entry.title) formData.set("title", entry.title);
+    formData.set("startedAt", startedAt.toISOString());
+    formData.set("endedAt", endedAt.toISOString());
+    await updateLogAction(formData);
+  }
+
+  function beginGesture(event: React.PointerEvent<HTMLElement>, entry: CalendarLog, kind: DragKind) {
+    event.stopPropagation();
+    try {
+      event.currentTarget.setPointerCapture(event.pointerId);
+    } catch {
+      // Some pointer sources don't support capture; drag still works via bubbling.
+    }
+    const display = getDisplayForEntry(entry);
+    const columnRects = dayColRefs.current.map((el) => el?.getBoundingClientRect() ?? null);
+    gestureRef.current = {
+      pointerId: event.pointerId,
+      entry,
+      kind,
+      startX: event.clientX,
+      startY: event.clientY,
+      moved: false,
+      originDayIndex: display.dayIndex,
+      originStartMinutes: display.startMinutes,
+      originEndMinutes: display.endMinutes,
+      columnRects,
+    };
+  }
+
+  function handleGestureMove(event: React.PointerEvent<HTMLElement>) {
+    const gesture = gestureRef.current;
+    if (!gesture || event.pointerId !== gesture.pointerId) return;
+    const dx = event.clientX - gesture.startX;
+    const dy = event.clientY - gesture.startY;
+    if (!gesture.moved && Math.hypot(dx, dy) < 4) return;
+    gesture.moved = true;
+
+    const deltaMinutes = snapMinutes(((event.clientY - gesture.startY) / SLOT_HEIGHT) * 60);
+
+    if (gesture.kind === "move") {
+      const duration = gesture.originEndMinutes - gesture.originStartMinutes;
+      const startMinutes = clamp(gesture.originStartMinutes + deltaMinutes, 0, 1440 - duration);
+      const dayIndex = xToDayIndex(event.clientX, gesture.columnRects, gesture.originDayIndex);
+      setDraft({ id: gesture.entry.id, dayIndex, startMinutes, endMinutes: startMinutes + duration });
+    } else if (gesture.kind === "resize-bottom") {
+      const endMinutes = clamp(
+        gesture.originEndMinutes + deltaMinutes,
+        gesture.originStartMinutes + MIN_DURATION_MINUTES,
+        1440,
+      );
+      setDraft({ id: gesture.entry.id, dayIndex: gesture.originDayIndex, startMinutes: gesture.originStartMinutes, endMinutes });
+    } else {
+      const startMinutes = clamp(
+        gesture.originStartMinutes + deltaMinutes,
+        0,
+        gesture.originEndMinutes - MIN_DURATION_MINUTES,
+      );
+      setDraft({ id: gesture.entry.id, dayIndex: gesture.originDayIndex, startMinutes, endMinutes: gesture.originEndMinutes });
+    }
+  }
+
+  async function handleGestureEnd(event: React.PointerEvent<HTMLElement>) {
+    const gesture = gestureRef.current;
+    if (!gesture || event.pointerId !== gesture.pointerId) return;
+    try {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    } catch {
+      // No-op if capture was never established.
+    }
+    gestureRef.current = null;
+
+    if (!draft || draft.id !== gesture.entry.id) {
+      setDraft(null);
+      setEditingLogId(gesture.entry.id);
+      return;
+    }
+
+    const { dayIndex, startMinutes, endMinutes } = draft;
+    setDraft(null);
+    await commitLogChange(gesture.entry, dayIndex, startMinutes, endMinutes);
+  }
 
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-4">
@@ -84,20 +245,17 @@ export function WeekCalendar({
             >
               <select
                 name="categoryId"
-                required
                 defaultValue=""
                 className="h-10 w-full rounded-[8px] border border-[#3f3f3f] bg-[#242424] px-2"
               >
-                <option value="" disabled>
-                  Select category
-                </option>
+                <option value="">No category</option>
                 {categories.map((category) => (
                   <option key={category.id} value={category.id}>
                     {category.name}
                   </option>
                 ))}
               </select>
-              <Input name="title" placeholder="Title" className="border-[#3f3f3f] bg-[#242424] text-[#f1f1f1]" />
+              <Input name="title" placeholder="Untitled" className="border-[#3f3f3f] bg-[#242424] text-[#f1f1f1]" />
               <div>
                 <label className="mb-1 block text-xs text-[#bbbbbb]">Start</label>
                 <Input
@@ -171,55 +329,98 @@ export function WeekCalendar({
             ))}
           </div>
 
-          {weekDays.map((day) => (
-            <div key={`col-${day.toISOString()}`} className="relative border-r border-[#3f3f3f] last:border-r-0" style={{ height: DAY_HEIGHT }}>
-              {Array.from({ length: 24 }).map((_, hour) => {
-                const slotDate = new Date(day);
-                slotDate.setHours(hour, 0, 0, 0);
-                return (
-                  <button
-                    key={`${day.toISOString()}-${hour}`}
-                    type="button"
-                    onClick={() => openCreateSlot(slotDate)}
-                    className="absolute left-0 right-0 border-t border-[#343434] transition hover:bg-[#313131]"
-                    style={{ top: `${hour * SLOT_HEIGHT}px`, height: `${SLOT_HEIGHT}px` }}
-                  />
-                );
-              })}
+          {weekDays.map((day, dayIndex) => (
+            <div
+              key={`col-${day.toISOString()}`}
+              ref={(el) => {
+                dayColRefs.current[dayIndex] = el;
+              }}
+              className="relative border-r border-[#3f3f3f] last:border-r-0"
+              style={{ height: DAY_HEIGHT }}
+              onClick={(event) => {
+                const rect = event.currentTarget.getBoundingClientRect();
+                const minutes = yToMinutes(event.clientY - rect.top);
+                openCreateSlot(addMinutes(startOfDay(day), minutes));
+              }}
+            >
+              {HOUR_LABELS.map((_, hour) => (
+                <div
+                  key={hour}
+                  className="pointer-events-none absolute left-0 right-0 border-t border-[#343434]"
+                  style={{ top: `${hour * SLOT_HEIGHT}px`, height: `${SLOT_HEIGHT}px` }}
+                />
+              ))}
 
               {logs
-                .filter((entry) => format(new Date(entry.startedAt), "yyyy-MM-dd") === format(day, "yyyy-MM-dd"))
+                .filter((entry) => getDisplayForEntry(entry).dayIndex === dayIndex)
                 .map((entry) => {
-                  const start = new Date(entry.startedAt);
-                  const end = entry.endedAt ? new Date(entry.endedAt) : now;
-                  const minutesFromDayStart = differenceInMinutes(start, startOfDay(day));
-                  const durationMinutes = Math.max(30, differenceInMinutes(end, start));
-                  const top = (minutesFromDayStart / 60) * SLOT_HEIGHT;
+                  const display = getDisplayForEntry(entry);
+                  const durationMinutes = Math.max(MIN_DURATION_MINUTES, display.endMinutes - display.startMinutes);
+                  const top = (display.startMinutes / 60) * SLOT_HEIGHT;
                   const height = (durationMinutes / 60) * SLOT_HEIGHT;
+                  const isDragging = draft?.id === entry.id;
 
                   return (
                     <div
                       key={entry.id}
                       className="absolute left-1 right-1 z-10 rounded-[8px] border border-[#D0FF00] bg-[#2f3716] p-1 text-[10px]"
-                      style={{ top, height }}
+                      style={{ top, height, touchAction: "none", cursor: entry.isRunning ? "pointer" : "grab" }}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        if (entry.isRunning) setEditingLogId(entry.id);
+                      }}
+                      onPointerDown={
+                        entry.isRunning
+                          ? undefined
+                          : (event) => beginGesture(event, entry, "move")
+                      }
+                      onPointerMove={entry.isRunning ? undefined : handleGestureMove}
+                      onPointerUp={entry.isRunning ? undefined : handleGestureEnd}
                     >
                       <div className="mb-1 flex items-center justify-between gap-1">
                         <span className="truncate font-semibold" style={{ color: entry.categoryColor }}>
                           {entry.categoryName}
                         </span>
                         {entry.isRunning ? (
-                          <form action={stopTimerAction}>
+                          <form action={stopTimerAction} onClick={(event) => event.stopPropagation()}>
                             <input type="hidden" name="logId" value={entry.id} />
                             <button className="text-[#FF5C5C]" type="submit">
                               <Square className="size-3 fill-current" />
                             </button>
                           </form>
                         ) : (
-                          <span className="text-[#9b9b9b]">{format(end, "HH:mm")}</span>
+                          <span className="text-[#9b9b9b]">
+                            {format(addMinutes(startOfDay(weekDays[display.dayIndex]), display.endMinutes), "HH:mm")}
+                          </span>
                         )}
                       </div>
                       <div className="truncate text-[#f1f1f1]">{entry.title || "Untitled"}</div>
-                      <div className="text-[#bbbbbb]">{format(start, "HH:mm")} {entry.isRunning ? "• running" : `- ${format(end, "HH:mm")}`}</div>
+                      <div className="text-[#bbbbbb]">
+                        {format(addMinutes(startOfDay(weekDays[display.dayIndex]), display.startMinutes), "HH:mm")}{" "}
+                        {entry.isRunning
+                          ? "• running"
+                          : `- ${format(addMinutes(startOfDay(weekDays[display.dayIndex]), display.endMinutes), "HH:mm")}`}
+                      </div>
+
+                      {!entry.isRunning && (
+                        <>
+                          <div
+                            className="absolute inset-x-0 top-0 h-2"
+                            style={{ cursor: "ns-resize", touchAction: "none" }}
+                            onPointerDown={(event) => beginGesture(event, entry, "resize-top")}
+                            onPointerMove={handleGestureMove}
+                            onPointerUp={handleGestureEnd}
+                          />
+                          <div
+                            className="absolute inset-x-0 bottom-0 h-2"
+                            style={{ cursor: "ns-resize", touchAction: "none" }}
+                            onPointerDown={(event) => beginGesture(event, entry, "resize-bottom")}
+                            onPointerMove={handleGestureMove}
+                            onPointerUp={handleGestureEnd}
+                          />
+                        </>
+                      )}
+                      {isDragging && <div className="pointer-events-none absolute inset-0 rounded-[8px] ring-2 ring-[#D0FF00]" />}
                     </div>
                   );
                 })}
@@ -227,6 +428,15 @@ export function WeekCalendar({
           ))}
         </div>
       </div>
+
+      <EditLogDialog
+        log={editingLog}
+        categories={categories}
+        open={editingLogId !== null}
+        onOpenChange={(nextOpen) => {
+          if (!nextOpen) setEditingLogId(null);
+        }}
+      />
     </div>
   );
 }

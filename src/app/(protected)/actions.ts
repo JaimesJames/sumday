@@ -15,6 +15,7 @@ import {
   startTimer,
   stopTimer,
   updateLog,
+  updateRunningLog,
 } from "@/server/services/time-log-service";
 import {
   createMoneyCategory,
@@ -54,7 +55,7 @@ export async function deleteCategoryAction(formData: FormData) {
 export async function createLogAction(formData: FormData) {
   const user = await requireUser();
   await createManualLog(user.id, {
-    categoryId: formData.get("categoryId"),
+    categoryId: formData.get("categoryId") || undefined,
     title: formData.get("title") || undefined,
     note: formData.get("note") || undefined,
     startedAt: formData.get("startedAt"),
@@ -67,11 +68,22 @@ export async function createLogAction(formData: FormData) {
 export async function updateLogAction(formData: FormData) {
   const user = await requireUser();
   await updateLog(user.id, String(formData.get("id")), {
-    categoryId: formData.get("categoryId"),
+    categoryId: formData.get("categoryId") || undefined,
     title: formData.get("title") || undefined,
     note: formData.get("note") || undefined,
     startedAt: formData.get("startedAt"),
     endedAt: formData.get("endedAt"),
+  });
+  revalidatePath("/logs");
+  revalidatePath("/dashboard");
+}
+
+export async function updateRunningLogAction(formData: FormData) {
+  const user = await requireUser();
+  await updateRunningLog(user.id, String(formData.get("id")), {
+    categoryId: formData.get("categoryId") || undefined,
+    title: formData.get("title") || undefined,
+    note: formData.get("note") || undefined,
   });
   revalidatePath("/logs");
   revalidatePath("/dashboard");
@@ -87,7 +99,7 @@ export async function deleteLogAction(formData: FormData) {
 export async function startTimerAction(formData: FormData) {
   const user = await requireUser();
   await startTimer(user.id, {
-    categoryId: formData.get("categoryId"),
+    categoryId: formData.get("categoryId") || undefined,
     title: formData.get("title") || undefined,
     note: formData.get("note") || undefined,
   });
@@ -107,7 +119,7 @@ export async function stopTimerAction(formData: FormData) {
 export async function createCalendarSlotAction(formData: FormData) {
   const user = await requireUser();
   await createCalendarSlot(user.id, {
-    categoryId: formData.get("categoryId"),
+    categoryId: formData.get("categoryId") || undefined,
     title: formData.get("title") || undefined,
     note: formData.get("note") || undefined,
     startedAt: formData.get("startedAt"),
