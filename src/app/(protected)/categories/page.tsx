@@ -28,7 +28,7 @@ export default async function CategoriesPage() {
               <Label htmlFor="color">Color</Label>
               <Input id="color" type="color" name="color" defaultValue="#8B5CF6" required />
             </div>
-            <Button className="rounded-full">Add category</Button>
+            <Button type="submit" className="rounded-full">Add category</Button>
           </form>
         </CardContent>
       </Card>
@@ -50,10 +50,11 @@ export default async function CategoriesPage() {
               <Input name="name" defaultValue={category.name} required />
               <Input type="color" name="color" defaultValue={category.color} required />
               <div className="flex gap-2">
-                <Button size="sm" className="rounded-full">
+                <Button type="submit" size="sm" className="rounded-full">
                   Save
                 </Button>
                 <Button
+                  type="submit"
                   size="sm"
                   variant="destructive"
                   formAction={deleteCategoryAction}

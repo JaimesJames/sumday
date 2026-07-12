@@ -31,7 +31,7 @@ export default async function DashboardPage() {
             <form action={stopTimerAction} className="flex items-center gap-2">
               <input type="hidden" name="logId" value={summary.runningTimer.id} />
               <Badge className="bg-emerald-500 text-white">Running</Badge>
-              <Button className="rounded-full">Stop Timer</Button>
+              <Button type="submit" className="rounded-full">Stop Timer</Button>
             </form>
           ) : (
             <p className="text-sm text-slate-500">No timer running now</p>
@@ -54,7 +54,7 @@ export default async function DashboardPage() {
               ))}
             </select>
             <Input name="title" placeholder="Title (optional)" />
-            <Button className="w-full rounded-full">Start</Button>
+            <Button type="submit" className="w-full rounded-full">Start</Button>
           </form>
         </CardContent>
       </Card>

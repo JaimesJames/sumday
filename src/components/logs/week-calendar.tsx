@@ -134,7 +134,7 @@ export function WeekCalendar({
               )}
             </form>
             <DialogFooter className="bg-transparent">
-              <Button form="create-slot-form" className="rounded-[8px] bg-[#D0FF00] text-[#202609] hover:bg-[#D0FF00]/90">
+              <Button type="submit" form="create-slot-form" className="rounded-[8px] bg-[#D0FF00] text-[#202609] hover:bg-[#D0FF00]/90">
                 Save slot
               </Button>
             </DialogFooter>

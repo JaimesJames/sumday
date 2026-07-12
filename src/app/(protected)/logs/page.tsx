@@ -79,6 +79,7 @@ export default async function LogsPage({ searchParams }: LogsPageProps) {
               ))}
             </select>
             <Button
+              type="submit"
               size="icon"
               className="size-10 rounded-full bg-[#D0FF00] text-[#202609] hover:bg-[#D0FF00]/90"
               aria-label="Start log"

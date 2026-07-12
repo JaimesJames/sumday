@@ -31,7 +31,7 @@ export default async function MoneyPage({ searchParams }: { searchParams: Promis
       <div className="mx-auto max-w-[1500px] space-y-4 pb-8">
         <header className="flex flex-wrap items-center justify-between gap-3">
           <div><h2 className="text-2xl font-semibold">Money</h2><p className="text-sm text-[#a9a9a9]">Daily cash flow and upcoming commitments</p></div>
-          <form action={changeMoneyMonthAction} className="flex items-center gap-2"><Input type="month" name="month" defaultValue={month} className={inputClass} /><Button variant="outline">View</Button></form>
+          <form action={changeMoneyMonthAction} className="flex items-center gap-2"><Input type="month" name="month" defaultValue={month} className={inputClass} /><Button type="submit" variant="outline">View</Button></form>
         </header>
         {query.sync === "ok" ? <div className="rounded-[8px] border border-[#22C55E] bg-[#17351f] px-4 py-2 text-sm text-[#9BE7AE]">Calendar synced: {query.created ?? 0} created, {query.updated ?? 0} updated.</div> : null}
         {query.calendar === "connected" ? <div className="rounded-[8px] border border-[#38BDF8] bg-[#17303a] px-4 py-2 text-sm text-[#9DDBF5]">Google Calendar connected. You can sync active commitments now.</div> : null}
@@ -50,12 +50,12 @@ export default async function MoneyPage({ searchParams }: { searchParams: Promis
                 <select name="categoryId" required className={`${selectClass} w-full`}><option value="">Category</option>{categories.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}</select>
                 <Input name="occurredOn" type="date" required defaultValue={format(new Date(), "yyyy-MM-dd")} className={inputClass} />
                 <Input name="note" placeholder="Note (optional)" className={inputClass} /><input type="hidden" name="currency" value="THB" />
-                <Button className="w-full bg-[#D0FF00] text-[#202609]"><Plus className="size-4" />Add transaction</Button>
+                <Button type="submit" className="w-full bg-[#D0FF00] text-[#202609]"><Plus className="size-4" />Add transaction</Button>
               </form>
             </CardContent></Card>
 
             <Card className="border-[#3a3a3a] bg-[#2B2B2B]"><CardHeader><CardTitle className="text-base">Add category</CardTitle></CardHeader><CardContent>
-              <form action={createMoneyCategoryAction} className="grid grid-cols-[1fr_auto] gap-2"><Input name="name" placeholder="Category name" required className={inputClass} /><select name="kind" className={selectClass}><option value="both">Both</option><option value="expense">Expense</option><option value="income">Income</option></select><Input type="color" name="color" defaultValue="#38BDF8" className="col-span-2 h-10 w-full" /><Button variant="outline" className="col-span-2">Create category</Button></form>
+              <form action={createMoneyCategoryAction} className="grid grid-cols-[1fr_auto] gap-2"><Input name="name" placeholder="Category name" required className={inputClass} /><select name="kind" className={selectClass}><option value="both">Both</option><option value="expense">Expense</option><option value="income">Income</option></select><Input type="color" name="color" defaultValue="#38BDF8" className="col-span-2 h-10 w-full" /><Button type="submit" variant="outline" className="col-span-2">Create category</Button></form>
             </CardContent></Card>
           </div>
 
@@ -64,7 +64,7 @@ export default async function MoneyPage({ searchParams }: { searchParams: Promis
               <div key={transaction.id} className="grid grid-cols-[100px_1fr_auto_auto] items-center gap-3 border-b border-[#3a3a3a] py-3">
                 <span className="text-xs text-[#aaa]">{transaction.occurredOn}</span><div><p className="font-medium" style={{ color: categoryColor }}>{categoryName}</p><p className="text-xs text-[#999]">{transaction.note || "No note"}</p></div>
                 <span className={transaction.kind === "income" ? "text-[#22C55E]" : "text-[#FB7185]"}>{transaction.kind === "income" ? "+" : "-"}{formatMoney(transaction.amountMinor, transaction.currency)}</span>
-                <form action={deleteMoneyTransactionAction}><input type="hidden" name="id" value={transaction.id} /><Button size="icon" variant="ghost" title="Delete transaction"><Trash2 className="size-4" /></Button></form>
+                <form action={deleteMoneyTransactionAction}><input type="hidden" name="id" value={transaction.id} /><Button type="submit" size="icon" variant="ghost" title="Delete transaction"><Trash2 className="size-4" /></Button></form>
               </div>
             ))}
           </CardContent></Card>
@@ -78,15 +78,15 @@ export default async function MoneyPage({ searchParams }: { searchParams: Promis
               <div className="grid grid-cols-2 gap-2"><Input name="firstDueOn" type="date" required className={inputClass} /><select name="frequency" className={selectClass}><option value="once">One time</option><option value="weekly">Weekly</option><option value="monthly">Monthly</option><option value="yearly">Yearly</option></select></div>
               <div className="grid grid-cols-2 gap-2"><Input name="installmentCount" type="number" min="1" placeholder="Installments" className={inputClass} /><Input name="endsOn" type="date" className={inputClass} /></div>
               <Input name="note" placeholder="Note (optional)" className={inputClass} /><input type="hidden" name="currency" value="THB" />
-              <Button className="w-full bg-[#D0FF00] text-[#202609]"><CircleDollarSign className="size-4" />Add commitment</Button>
+              <Button type="submit" className="w-full bg-[#D0FF00] text-[#202609]"><CircleDollarSign className="size-4" />Add commitment</Button>
             </form>
           </CardContent></Card>
 
-          <Card className="border-[#3a3a3a] bg-[#2B2B2B]"><CardHeader className="flex-row items-center justify-between"><CardTitle className="text-base">Commitments</CardTitle>{calendarState.googleConnected ? <form action={syncMoneyCalendarAction}><Button variant="outline"><CalendarSync className="size-4" />Sync Calendar</Button></form> : <Link href="/api/integrations/google-calendar/connect" className={cn(buttonVariants({ variant: "outline" }))}><CalendarSync className="size-4" />Connect Google Calendar</Link>}</CardHeader><CardContent className="space-y-2">
+          <Card className="border-[#3a3a3a] bg-[#2B2B2B]"><CardHeader className="flex-row items-center justify-between"><CardTitle className="text-base">Commitments</CardTitle>{calendarState.googleConnected ? <form action={syncMoneyCalendarAction}><Button type="submit" variant="outline"><CalendarSync className="size-4" />Sync Calendar</Button></form> : <Link href="/api/integrations/google-calendar/connect" className={cn(buttonVariants({ variant: "outline" }))}><CalendarSync className="size-4" />Connect Google Calendar</Link>}</CardHeader><CardContent className="space-y-2">
             {commitments.length === 0 ? <p className="py-10 text-center text-sm text-[#999]">No commitments yet.</p> : commitments.map(({ commitment, categoryName, categoryColor }) => (
               <div key={commitment.id} className="grid gap-2 border-b border-[#3a3a3a] py-3 md:grid-cols-[1fr_auto_auto_auto] md:items-center"><div><p className="font-medium">{commitment.name}</p><p className="text-xs" style={{ color: categoryColor }}>{categoryName} - {commitment.frequency} - due {commitment.firstDueOn}</p></div><span className="font-medium">{formatMoney(commitment.amountMinor, commitment.currency)}</span>
-                <form action={setCommitmentStatusAction}><input type="hidden" name="id" value={commitment.id} /><select name="status" defaultValue={commitment.status} className={selectClass}><option value="active">Active</option><option value="paused">Paused</option><option value="completed">Completed</option></select><Button size="sm" variant="ghost">Save</Button></form>
-                <form action={deleteMoneyCommitmentAction}><input type="hidden" name="id" value={commitment.id} /><Button size="icon" variant="ghost" title="Delete commitment"><Trash2 className="size-4" /></Button></form>
+                <form action={setCommitmentStatusAction}><input type="hidden" name="id" value={commitment.id} /><select name="status" defaultValue={commitment.status} className={selectClass}><option value="active">Active</option><option value="paused">Paused</option><option value="completed">Completed</option></select><Button type="submit" size="sm" variant="ghost">Save</Button></form>
+                <form action={deleteMoneyCommitmentAction}><input type="hidden" name="id" value={commitment.id} /><Button type="submit" size="icon" variant="ghost" title="Delete commitment"><Trash2 className="size-4" /></Button></form>
               </div>
             ))}
           </CardContent></Card>
