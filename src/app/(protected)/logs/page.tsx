@@ -1,61 +1,55 @@
-import { endOfMonth, endOfWeek, format, isWithinInterval, startOfMonth, startOfWeek } from "date-fns";
+import { addWeeks, endOfWeek, format, startOfWeek, subWeeks } from "date-fns";
 import { Play } from "lucide-react";
 import {
-  deleteLogAction,
   startTimerAction,
-  updateLogAction,
 } from "@/app/(protected)/actions";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import { formatDuration } from "@/lib/time";
+import { WeekCalendar } from "@/components/logs/week-calendar";
 import { requireUser } from "@/server/auth/session";
 import { listCategories } from "@/server/services/category-service";
 import { listTimeLogs } from "@/server/services/time-log-service";
 
 type LogsPageProps = {
-  searchParams: Promise<{ categoryId?: string; from?: string; to?: string; month?: string }>;
+  searchParams: Promise<{ week?: string }>;
 };
 
 export default async function LogsPage({ searchParams }: LogsPageProps) {
   const user = await requireUser();
   const filters = await searchParams;
-  const monthDate = filters.month ? new Date(`${filters.month}-01T00:00:00`) : new Date();
-  const effectiveFrom = filters.from ? new Date(filters.from) : startOfMonth(monthDate);
-  const effectiveTo = filters.to ? new Date(filters.to) : endOfMonth(monthDate);
+  const baseDate = filters.week ? new Date(`${filters.week}T00:00:00`) : new Date();
+  const weekStart = startOfWeek(baseDate, { weekStartsOn: 1 });
+  const weekEnd = endOfWeek(baseDate, { weekStartsOn: 1 });
   const categories = await listCategories(user.id);
   const logs = await listTimeLogs(user.id, {
-    categoryId: filters.categoryId,
-    from: effectiveFrom,
-    to: effectiveTo,
+    from: weekStart,
+    to: weekEnd,
   });
-  const currentWeekStart = startOfWeek(new Date(), { weekStartsOn: 1 });
-  const currentWeekEnd = endOfWeek(new Date(), { weekStartsOn: 1 });
-  const weekLabels = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
-  const logsByWeekDay = weekLabels.map((_, index) =>
-    logs
-      .filter(({ log }) => {
-        const weekdayIndex = (log.startedAt.getDay() + 6) % 7;
-        return weekdayIndex === index && isWithinInterval(log.startedAt, { start: currentWeekStart, end: currentWeekEnd });
-      })
-      .sort((a, b) => a.log.startedAt.getTime() - b.log.startedAt.getTime()),
-  );
+  const weekStartParam = format(weekStart, "yyyy-MM-dd");
+  const prevWeekParam = format(subWeeks(weekStart, 1), "yyyy-MM-dd");
+  const nextWeekParam = format(addWeeks(weekStart, 1), "yyyy-MM-dd");
 
   return (
     <div className="flex h-full flex-col gap-3 overflow-hidden">
       <Card className="shrink-0 rounded-[28px] border border-[#3a3a3a] bg-[#2B2B2B] text-[#f1f1f1]">
         <CardContent className="p-3">
-          <form className="grid gap-2 md:grid-cols-4">
-            <div className="text-sm text-[#f1f1f1] md:col-span-1 md:self-center">Month</div>
-            <Input
-              type="month"
-              name="month"
-              defaultValue={filters.month ?? format(new Date(), "yyyy-MM")}
-              className="border-[#3f3f3f] bg-[#2B2B2B] text-[#f1f1f1] md:col-span-2"
-            />
-            <Button className="rounded-xl bg-[#D0FF00] text-[#202609] hover:bg-[#D0FF00]/90 md:col-span-1">Apply month</Button>
-          </form>
+          <div className="flex items-center justify-between gap-2">
+            <div className="text-sm text-[#f1f1f1]">
+              Week: {format(weekStart, "dd MMM")} - {format(weekEnd, "dd MMM yyyy")}
+            </div>
+            <div className="flex gap-2">
+              <a href={`/logs?week=${prevWeekParam}`} className="rounded-[8px] border border-[#3f3f3f] px-3 py-1 text-sm text-[#f1f1f1]">
+                Prev
+              </a>
+              <a href={`/logs?week=${format(startOfWeek(new Date(), { weekStartsOn: 1 }), "yyyy-MM-dd")}`} className="rounded-[8px] border border-[#3f3f3f] px-3 py-1 text-sm text-[#f1f1f1]">
+                This week
+              </a>
+              <a href={`/logs?week=${nextWeekParam}`} className="rounded-[8px] border border-[#3f3f3f] px-3 py-1 text-sm text-[#f1f1f1]">
+                Next
+              </a>
+            </div>
+          </div>
         </CardContent>
       </Card>
 
@@ -92,56 +86,20 @@ export default async function LogsPage({ searchParams }: LogsPageProps) {
               <Play className="size-5 fill-current" />
             </Button>
           </form>
-
-          <div className="grid min-h-0 flex-1 grid-cols-7 overflow-hidden rounded-[20px] border border-[#3a3a3a] bg-[#2B2B2B]">
-            {weekLabels.map((day) => (
-              <div key={day} className="border-r border-[#3f3f3f] px-3 py-2 text-center text-xs tracking-wide text-[#f1f1f1] last:border-r-0">
-                {day}
-              </div>
-            ))}
-            {logsByWeekDay.map((dayLogs, dayIndex) => (
-              <div
-                key={weekLabels[dayIndex]}
-                className="space-y-2 overflow-hidden border-r border-dashed border-[#3f3f3f] p-2.5 last:border-r-0"
-              >
-                {dayLogs.map(({ log, categoryColor, categoryName }) => (
-                  <form
-                    key={log.id}
-                    action={updateLogAction}
-                    className="space-y-1 rounded-xl border border-[#D0FF00] bg-[#303717] p-2"
-                    style={{ minHeight: `${Math.max(42, Math.round((log.durationSeconds ?? 1800) / 65))}px` }}
-                  >
-                    <input type="hidden" name="id" value={log.id} />
-                    <div className="flex items-center justify-between gap-1">
-                      <Badge className="border-0 text-[11px] text-[#1f2312]" style={{ backgroundColor: categoryColor }}>
-                        {categoryName}
-                      </Badge>
-                      <button
-                        formAction={deleteLogAction}
-                        className="cursor-pointer text-[10px] text-[#FF5C5C] opacity-80 transition hover:opacity-100"
-                      >
-                        delete
-                      </button>
-                    </div>
-                    <Input
-                      name="title"
-                      defaultValue={log.title ?? ""}
-                      placeholder="Title"
-                      className="h-7 border-[#3f3f3f] bg-[#2B2B2B] text-[11px] text-[#f1f1f1]"
-                    />
-                    <div className="text-[10px] text-[#e8e8e8]/90">
-                      {format(log.startedAt, "HH:mm")} - {log.endedAt ? format(log.endedAt, "HH:mm") : "ongoing"}
-                    </div>
-                    <div className="text-[10px] text-[#e8e8e8]/80">{formatDuration(log.durationSeconds ?? 0)}</div>
-                  </form>
-                ))}
-              </div>
-            ))}
-          </div>
-
-          {logs.length === 0 && (
-            <div className="shrink-0 rounded-xl border border-dashed border-[#3f3f3f] p-4 text-sm text-[#f1f1f1]">No logs found for current filters.</div>
-          )}
+          <WeekCalendar
+            weekStartIso={weekStartParam}
+            categories={categories.map((category) => ({ id: category.id, name: category.name, color: category.color }))}
+            logs={logs.map(({ log, categoryName, categoryColor }) => ({
+              id: log.id,
+              title: log.title,
+              startedAt: log.startedAt.toISOString(),
+              endedAt: log.endedAt ? log.endedAt.toISOString() : null,
+              isRunning: log.isRunning,
+              categoryId: log.categoryId,
+              categoryName,
+              categoryColor,
+            }))}
+          />
         </CardContent>
       </Card>
     </div>

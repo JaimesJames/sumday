@@ -3,6 +3,7 @@ import { differenceInSeconds } from "date-fns";
 import { db } from "@/server/db";
 import { categories, timeLogs } from "@/server/db/schema";
 import {
+  calendarSlotSchema,
   manualLogSchema,
   startTimerSchema,
   stopTimerSchema,
@@ -115,6 +116,54 @@ export async function stopTimer(userId: string, rawInput: unknown) {
     .where(and(eq(timeLogs.id, input.logId), eq(timeLogs.userId, userId)))
     .returning();
   return updated;
+}
+
+export async function createCalendarSlot(userId: string, rawInput: unknown) {
+  const input = calendarSlotSchema.parse(rawInput);
+  await ensureCategoryOwnership(userId, input.categoryId);
+
+  if (input.mode === "running") {
+    const [running] = await db
+      .select({ id: timeLogs.id })
+      .from(timeLogs)
+      .where(and(eq(timeLogs.userId, userId), eq(timeLogs.isRunning, true)))
+      .limit(1);
+
+    if (running) {
+      throw new Error("You already have a running timer.");
+    }
+
+    const [createdRunning] = await db
+      .insert(timeLogs)
+      .values({
+        userId,
+        categoryId: input.categoryId,
+        title: input.title,
+        note: input.note,
+        startedAt: input.startedAt,
+        isRunning: true,
+        endedAt: null,
+        durationSeconds: null,
+      })
+      .returning();
+    return createdRunning;
+  }
+
+  const durationSeconds = differenceInSeconds(input.endedAt!, input.startedAt);
+  const [createdInstant] = await db
+    .insert(timeLogs)
+    .values({
+      userId,
+      categoryId: input.categoryId,
+      title: input.title,
+      note: input.note,
+      startedAt: input.startedAt,
+      endedAt: input.endedAt!,
+      durationSeconds,
+      isRunning: false,
+    })
+    .returning();
+  return createdInstant;
 }
 
 export async function updateLog(userId: string, logId: string, rawInput: unknown) {

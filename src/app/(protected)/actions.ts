@@ -8,6 +8,7 @@ import {
   updateCategory,
 } from "@/server/services/category-service";
 import {
+  createCalendarSlot,
   createManualLog,
   deleteLog,
   startTimer,
@@ -88,6 +89,20 @@ export async function stopTimerAction(formData: FormData) {
   const user = await requireUser();
   await stopTimer(user.id, {
     logId: formData.get("logId"),
+  });
+  revalidatePath("/dashboard");
+  revalidatePath("/logs");
+}
+
+export async function createCalendarSlotAction(formData: FormData) {
+  const user = await requireUser();
+  await createCalendarSlot(user.id, {
+    categoryId: formData.get("categoryId"),
+    title: formData.get("title") || undefined,
+    note: formData.get("note") || undefined,
+    startedAt: formData.get("startedAt"),
+    endedAt: formData.get("endedAt") || undefined,
+    mode: formData.get("mode") || "instant",
   });
   revalidatePath("/dashboard");
   revalidatePath("/logs");
