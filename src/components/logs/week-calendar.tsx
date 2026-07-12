@@ -451,6 +451,9 @@ export function WeekCalendar({
                         left: `calc(${leftPercent}% + 2px)`,
                         width: `calc(${widthPercent}% - 4px)`,
                         zIndex: isDragging ? 20 : 10,
+                        transition: isDragging
+                          ? "top 100ms ease-out, height 100ms ease-out, left 100ms ease-out, width 100ms ease-out"
+                          : undefined,
                         touchAction: "none",
                         userSelect: "none",
                         WebkitUserSelect: "none",
