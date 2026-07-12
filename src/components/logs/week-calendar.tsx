@@ -74,7 +74,14 @@ export function WeekCalendar({
             <DialogHeader>
               <DialogTitle>Create slot</DialogTitle>
             </DialogHeader>
-            <form id="create-slot-form" action={createCalendarSlotAction} className="space-y-3">
+            <form
+              id="create-slot-form"
+              action={async (formData) => {
+                await createCalendarSlotAction(formData);
+                setOpen(false);
+              }}
+              className="space-y-3"
+            >
               <select
                 name="categoryId"
                 required

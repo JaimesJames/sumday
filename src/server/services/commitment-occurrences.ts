@@ -9,7 +9,9 @@ export type RecurringCommitment = {
 
 export function expandCommitmentOccurrences(commitment: RecurringCommitment, horizonEnd: string) {
   const results: string[] = [];
-  let current = parseISO(commitment.firstDueOn);
+  const anchor = parseISO(commitment.firstDueOn);
+  let current = anchor;
+  let occurrenceIndex = 0;
   const horizon = parseISO(horizonEnd);
   const end = commitment.endsOn ? parseISO(commitment.endsOn) : horizon;
   const limit = commitment.installmentCount ?? 120;
@@ -17,9 +19,10 @@ export function expandCommitmentOccurrences(commitment: RecurringCommitment, hor
   while (current <= horizon && current <= end && results.length < limit) {
     results.push(format(current, "yyyy-MM-dd"));
     if (commitment.frequency === "once") break;
-    current = commitment.frequency === "weekly" ? addWeeks(current, 1)
-      : commitment.frequency === "monthly" ? addMonths(current, 1)
-      : addYears(current, 1);
+    occurrenceIndex += 1;
+    current = commitment.frequency === "weekly" ? addWeeks(anchor, occurrenceIndex)
+      : commitment.frequency === "monthly" ? addMonths(anchor, occurrenceIndex)
+      : addYears(anchor, occurrenceIndex);
   }
   return results;
 }

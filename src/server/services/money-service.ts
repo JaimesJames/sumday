@@ -3,6 +3,7 @@ import { db } from "@/server/db";
 import { moneyCategories, moneyCommitments, moneyTransactions } from "@/server/db/schema";
 import { monthRange } from "@/lib/money";
 import { moneyCategorySchema, moneyCommitmentSchema, moneyTransactionSchema } from "@/server/validators/money";
+import { expandCommitmentOccurrences } from "@/server/services/commitment-occurrences";
 
 async function requireCategory(userId: string, categoryId: string, kind: "income" | "expense") {
   const [category] = await db.select().from(moneyCategories).where(and(eq(moneyCategories.id, categoryId), eq(moneyCategories.userId, userId))).limit(1);
@@ -85,7 +86,16 @@ export async function getUpcomingExpenseTotal(userId: string) {
   const today = new Date();
   const end = new Date(today);
   end.setDate(end.getDate() + 30);
-  const [row] = await db.select({ total: sql<number>`coalesce(sum(${moneyCommitments.amountMinor}), 0)::bigint` })
-    .from(moneyCommitments).where(and(eq(moneyCommitments.userId, userId), eq(moneyCommitments.status, "active"), eq(moneyCommitments.kind, "expense"), lte(moneyCommitments.firstDueOn, end.toISOString().slice(0, 10))));
-  return Number(row?.total ?? 0);
+  const todayIso = today.toISOString().slice(0, 10);
+  const endIso = end.toISOString().slice(0, 10);
+  const commitments = await db.select().from(moneyCommitments).where(and(
+    eq(moneyCommitments.userId, userId),
+    eq(moneyCommitments.status, "active"),
+    eq(moneyCommitments.kind, "expense"),
+  ));
+  return commitments.reduce((total, commitment) => {
+    const occurrences = expandCommitmentOccurrences(commitment, endIso)
+      .filter((occurrence) => occurrence >= todayIso);
+    return total + occurrences.length * commitment.amountMinor;
+  }, 0);
 }

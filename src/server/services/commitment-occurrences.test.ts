@@ -8,7 +8,7 @@ test("expands monthly commitments without exceeding installments", () => {
       { firstDueOn: "2026-01-31", frequency: "monthly", installmentCount: 3, endsOn: null },
       "2026-12-31",
     ),
-    ["2026-01-31", "2026-02-28", "2026-03-28"],
+    ["2026-01-31", "2026-02-28", "2026-03-31"],
   );
 });
 

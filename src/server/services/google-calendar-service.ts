@@ -61,12 +61,13 @@ export async function syncMoneyCommitmentsToGoogle(userId: string) {
   const token = await getAccessToken(userId);
   const calendarId = await ensureCalendar(userId, token);
   const commitments = await db.select().from(moneyCommitments).where(and(eq(moneyCommitments.userId, userId), eq(moneyCommitments.status, "active")));
+  const today = format(new Date(), "yyyy-MM-dd");
   const horizon = format(addYears(new Date(), 1), "yyyy-MM-dd");
   let created = 0;
   let updated = 0;
 
   for (const commitment of commitments) {
-    for (const occurrenceOn of expandCommitmentOccurrences(commitment, horizon)) {
+    for (const occurrenceOn of expandCommitmentOccurrences(commitment, horizon).filter((occurrence) => occurrence >= today)) {
       const payload = eventPayload(commitment, occurrenceOn);
       const hash = createHash("sha256").update(JSON.stringify(payload)).digest("hex");
       const [link] = await db.select().from(calendarEventLinks).where(and(eq(calendarEventLinks.commitmentId, commitment.id), eq(calendarEventLinks.occurrenceOn, occurrenceOn))).limit(1);
