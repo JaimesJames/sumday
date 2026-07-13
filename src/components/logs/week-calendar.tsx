@@ -3,6 +3,7 @@
 import { addDays, addMinutes, differenceInMinutes, endOfWeek, format, startOfDay } from "date-fns";
 import { Plus, Square } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -170,6 +171,7 @@ export function WeekCalendar({ weekStartIso }: { weekStartIso: string }) {
 
   const createCalendarSlot = trpc.timeLog.createCalendarSlot.useMutation({
     onSuccess: () => invalidateLogs(),
+    onError: (error) => toast.error(error.message),
   });
   const updateLog = trpc.timeLog.update.useMutation({ onSuccess: () => invalidateLogs() });
   const stopTimer = trpc.timeLog.stopTimer.useMutation({ onSuccess: () => invalidateLogs() });

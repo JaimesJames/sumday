@@ -2,6 +2,7 @@
 
 import { Play } from "lucide-react";
 import { useRef } from "react";
+import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { trpc } from "@/trpc/react";
@@ -17,6 +18,7 @@ export function QuickStartLogForm() {
       utils.dashboard.summary.invalidate();
       formRef.current?.reset();
     },
+    onError: (error) => toast.error(error.message),
   });
 
   return (

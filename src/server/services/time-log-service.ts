@@ -17,6 +17,14 @@ type StopTimerInput = z.infer<typeof stopTimerSchema>;
 type CalendarSlotInput = z.infer<typeof calendarSlotSchema>;
 type RunningLogUpdateInput = z.infer<typeof runningLogUpdateSchema>;
 
+const RUNNING_TIMER_ERROR = "You already have a running timer.";
+
+function isUniqueViolation(error: unknown): boolean {
+  const code = (error as { code?: string; cause?: { code?: string } })?.cause?.code
+    ?? (error as { code?: string })?.code;
+  return code === "23505";
+}
+
 async function ensureCategoryOwnership(userId: string, categoryId: string) {
   const [category] = await db
     .select({ id: categories.id })
@@ -82,23 +90,30 @@ export async function startTimer(userId: string, input: StartTimerInput) {
     .where(and(eq(timeLogs.userId, userId), eq(timeLogs.isRunning, true)))
     .limit(1);
   if (running) {
-    throw new Error("You already have a running timer.");
+    throw new Error(RUNNING_TIMER_ERROR);
   }
 
-  const [created] = await db
-    .insert(timeLogs)
-    .values({
-      userId,
-      categoryId: input.categoryId,
-      title: input.title,
-      note: input.note,
-      startedAt: new Date(),
-      isRunning: true,
-      endedAt: null,
-      durationSeconds: null,
-    })
-    .returning();
-  return created;
+  try {
+    const [created] = await db
+      .insert(timeLogs)
+      .values({
+        userId,
+        categoryId: input.categoryId,
+        title: input.title,
+        note: input.note,
+        startedAt: new Date(),
+        isRunning: true,
+        endedAt: null,
+        durationSeconds: null,
+      })
+      .returning();
+    return created;
+  } catch (error) {
+    if (isUniqueViolation(error)) {
+      throw new Error(RUNNING_TIMER_ERROR);
+    }
+    throw error;
+  }
 }
 
 export async function stopTimer(userId: string, input: StopTimerInput) {
@@ -139,23 +154,30 @@ export async function createCalendarSlot(userId: string, input: CalendarSlotInpu
       .limit(1);
 
     if (running) {
-      throw new Error("You already have a running timer.");
+      throw new Error(RUNNING_TIMER_ERROR);
     }
 
-    const [createdRunning] = await db
-      .insert(timeLogs)
-      .values({
-        userId,
-        categoryId: input.categoryId,
-        title: input.title,
-        note: input.note,
-        startedAt: input.startedAt,
-        isRunning: true,
-        endedAt: null,
-        durationSeconds: null,
-      })
-      .returning();
-    return createdRunning;
+    try {
+      const [createdRunning] = await db
+        .insert(timeLogs)
+        .values({
+          userId,
+          categoryId: input.categoryId,
+          title: input.title,
+          note: input.note,
+          startedAt: input.startedAt,
+          isRunning: true,
+          endedAt: null,
+          durationSeconds: null,
+        })
+        .returning();
+      return createdRunning;
+    } catch (error) {
+      if (isUniqueViolation(error)) {
+        throw new Error(RUNNING_TIMER_ERROR);
+      }
+      throw error;
+    }
   }
 
   const durationSeconds = differenceInSeconds(input.endedAt!, input.startedAt);

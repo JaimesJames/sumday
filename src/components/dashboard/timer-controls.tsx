@@ -1,5 +1,6 @@
 "use client";
 
+import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -18,6 +19,7 @@ export function TimerControls({ runningTimerId }: { runningTimerId: string | nul
 
   const stopTimer = trpc.timeLog.stopTimer.useMutation({
     onSuccess: () => invalidateTimerState(utils),
+    onError: (error) => toast.error(error.message),
   });
 
   if (runningTimerId) {
@@ -44,6 +46,7 @@ export function QuickStartCard({ categories }: { categories: Category[] }) {
 
   const startTimer = trpc.timeLog.startTimer.useMutation({
     onSuccess: () => invalidateTimerState(utils),
+    onError: (error) => toast.error(error.message),
   });
 
   return (
