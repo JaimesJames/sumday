@@ -4,15 +4,6 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { requireUser } from "@/server/auth/session";
 import {
-  createCalendarSlot,
-  createManualLog,
-  deleteLog,
-  startTimer,
-  stopTimer,
-  updateLog,
-  updateRunningLog,
-} from "@/server/services/time-log-service";
-import {
   createMoneyCategory,
   createMoneyCommitment,
   createMoneyTransaction,
@@ -21,84 +12,6 @@ import {
   setCommitmentStatus,
 } from "@/server/services/money-service";
 import { syncMoneyCommitmentsToGoogle } from "@/server/services/google-calendar-service";
-
-export async function createLogAction(formData: FormData) {
-  const user = await requireUser();
-  await createManualLog(user.id, {
-    categoryId: formData.get("categoryId") || undefined,
-    title: formData.get("title") || undefined,
-    note: formData.get("note") || undefined,
-    startedAt: formData.get("startedAt"),
-    endedAt: formData.get("endedAt"),
-  });
-  revalidatePath("/logs");
-  revalidatePath("/dashboard");
-}
-
-export async function updateLogAction(formData: FormData) {
-  const user = await requireUser();
-  await updateLog(user.id, String(formData.get("id")), {
-    categoryId: formData.get("categoryId") || undefined,
-    title: formData.get("title") || undefined,
-    note: formData.get("note") || undefined,
-    startedAt: formData.get("startedAt"),
-    endedAt: formData.get("endedAt"),
-  });
-  revalidatePath("/logs");
-  revalidatePath("/dashboard");
-}
-
-export async function updateRunningLogAction(formData: FormData) {
-  const user = await requireUser();
-  await updateRunningLog(user.id, String(formData.get("id")), {
-    categoryId: formData.get("categoryId") || undefined,
-    title: formData.get("title") || undefined,
-    note: formData.get("note") || undefined,
-  });
-  revalidatePath("/logs");
-  revalidatePath("/dashboard");
-}
-
-export async function deleteLogAction(formData: FormData) {
-  const user = await requireUser();
-  await deleteLog(user.id, String(formData.get("id")));
-  revalidatePath("/logs");
-  revalidatePath("/dashboard");
-}
-
-export async function startTimerAction(formData: FormData) {
-  const user = await requireUser();
-  await startTimer(user.id, {
-    categoryId: formData.get("categoryId") || undefined,
-    title: formData.get("title") || undefined,
-    note: formData.get("note") || undefined,
-  });
-  revalidatePath("/dashboard");
-  revalidatePath("/logs");
-}
-
-export async function stopTimerAction(formData: FormData) {
-  const user = await requireUser();
-  await stopTimer(user.id, {
-    logId: formData.get("logId"),
-  });
-  revalidatePath("/dashboard");
-  revalidatePath("/logs");
-}
-
-export async function createCalendarSlotAction(formData: FormData) {
-  const user = await requireUser();
-  await createCalendarSlot(user.id, {
-    categoryId: formData.get("categoryId") || undefined,
-    title: formData.get("title") || undefined,
-    note: formData.get("note") || undefined,
-    startedAt: formData.get("startedAt"),
-    endedAt: formData.get("endedAt") || undefined,
-    mode: formData.get("mode") || "instant",
-  });
-  revalidatePath("/dashboard");
-  revalidatePath("/logs");
-}
 
 export async function createMoneyCategoryAction(formData: FormData) {
   const user = await requireUser();

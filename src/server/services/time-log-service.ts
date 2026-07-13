@@ -1,14 +1,21 @@
 import { and, desc, eq, gte, lte } from "drizzle-orm";
 import { differenceInSeconds } from "date-fns";
+import type { z } from "zod";
 import { db } from "@/server/db";
 import { categories, timeLogs } from "@/server/db/schema";
-import {
+import type {
   calendarSlotSchema,
   manualLogSchema,
   runningLogUpdateSchema,
   startTimerSchema,
   stopTimerSchema,
 } from "@/server/validators/time-log";
+
+type ManualLogInput = z.infer<typeof manualLogSchema>;
+type StartTimerInput = z.infer<typeof startTimerSchema>;
+type StopTimerInput = z.infer<typeof stopTimerSchema>;
+type CalendarSlotInput = z.infer<typeof calendarSlotSchema>;
+type RunningLogUpdateInput = z.infer<typeof runningLogUpdateSchema>;
 
 async function ensureCategoryOwnership(userId: string, categoryId: string) {
   const [category] = await db
@@ -42,8 +49,7 @@ export async function listTimeLogs(
     .orderBy(desc(timeLogs.startedAt));
 }
 
-export async function createManualLog(userId: string, rawInput: unknown) {
-  const input = manualLogSchema.parse(rawInput);
+export async function createManualLog(userId: string, input: ManualLogInput) {
   if (input.categoryId) {
     await ensureCategoryOwnership(userId, input.categoryId);
   }
@@ -65,8 +71,7 @@ export async function createManualLog(userId: string, rawInput: unknown) {
   return created;
 }
 
-export async function startTimer(userId: string, rawInput: unknown) {
-  const input = startTimerSchema.parse(rawInput);
+export async function startTimer(userId: string, input: StartTimerInput) {
   if (input.categoryId) {
     await ensureCategoryOwnership(userId, input.categoryId);
   }
@@ -96,9 +101,7 @@ export async function startTimer(userId: string, rawInput: unknown) {
   return created;
 }
 
-export async function stopTimer(userId: string, rawInput: unknown) {
-  const input = stopTimerSchema.parse(rawInput);
-
+export async function stopTimer(userId: string, input: StopTimerInput) {
   const [runningLog] = await db
     .select()
     .from(timeLogs)
@@ -123,8 +126,7 @@ export async function stopTimer(userId: string, rawInput: unknown) {
   return updated;
 }
 
-export async function createCalendarSlot(userId: string, rawInput: unknown) {
-  const input = calendarSlotSchema.parse(rawInput);
+export async function createCalendarSlot(userId: string, input: CalendarSlotInput) {
   if (input.categoryId) {
     await ensureCategoryOwnership(userId, input.categoryId);
   }
@@ -173,8 +175,7 @@ export async function createCalendarSlot(userId: string, rawInput: unknown) {
   return createdInstant;
 }
 
-export async function updateLog(userId: string, logId: string, rawInput: unknown) {
-  const input = manualLogSchema.parse(rawInput);
+export async function updateLog(userId: string, logId: string, input: ManualLogInput) {
   if (input.categoryId) {
     await ensureCategoryOwnership(userId, input.categoryId);
   }
@@ -197,8 +198,7 @@ export async function updateLog(userId: string, logId: string, rawInput: unknown
   return updated;
 }
 
-export async function updateRunningLog(userId: string, logId: string, rawInput: unknown) {
-  const input = runningLogUpdateSchema.parse(rawInput);
+export async function updateRunningLog(userId: string, logId: string, input: RunningLogUpdateInput) {
   if (input.categoryId) {
     await ensureCategoryOwnership(userId, input.categoryId);
   }

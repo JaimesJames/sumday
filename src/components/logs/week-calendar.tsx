@@ -1,9 +1,8 @@
 "use client";
 
-import { addDays, addMinutes, differenceInMinutes, format, startOfDay } from "date-fns";
+import { addDays, addMinutes, differenceInMinutes, endOfWeek, format, startOfDay } from "date-fns";
 import { Plus, Square } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { createCalendarSlotAction, stopTimerAction, updateLogAction } from "@/app/(protected)/actions";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -15,6 +14,7 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { EditLogDialog } from "@/components/logs/edit-log-dialog";
+import { trpc } from "@/trpc/react";
 
 export type CalendarCategory = {
   id: string;
@@ -129,15 +129,7 @@ type Gesture = {
   columnRects: (DOMRect | null)[];
 };
 
-export function WeekCalendar({
-  weekStartIso,
-  categories,
-  logs,
-}: {
-  weekStartIso: string;
-  categories: CalendarCategory[];
-  logs: CalendarLog[];
-}) {
+export function WeekCalendar({ weekStartIso }: { weekStartIso: string }) {
   const [open, setOpen] = useState(false);
   const [selectedStart, setSelectedStart] = useState(`${format(new Date(), "yyyy-MM-dd")}T09:00`);
   const [selectedEnd, setSelectedEnd] = useState(`${format(new Date(), "yyyy-MM-dd")}T10:00`);
@@ -148,6 +140,38 @@ export function WeekCalendar({
   const gestureRef = useRef<Gesture | null>(null);
   const dayColRefs = useRef<(HTMLDivElement | null)[]>([]);
   const gestureCleanupRef = useRef<(() => void) | null>(null);
+
+  const weekStart = useMemo(() => new Date(weekStartIso), [weekStartIso]);
+  const weekEnd = useMemo(() => endOfWeek(weekStart, { weekStartsOn: 1 }), [weekStart]);
+  const weekDays = useMemo(() => Array.from({ length: 7 }, (_, index) => addDays(weekStart, index)), [weekStart]);
+
+  const utils = trpc.useUtils();
+  const { data: categories = [] } = trpc.category.list.useQuery();
+  const { data: rawLogs = [] } = trpc.timeLog.list.useQuery({ from: weekStart, to: weekEnd });
+  const logs: CalendarLog[] = useMemo(
+    () =>
+      rawLogs.map(({ log, categoryName, categoryColor }) => ({
+        id: log.id,
+        title: log.title,
+        startedAt: log.startedAt.toISOString(),
+        endedAt: log.endedAt ? log.endedAt.toISOString() : null,
+        isRunning: log.isRunning,
+        categoryId: log.categoryId,
+        categoryName: categoryName ?? "No category",
+        categoryColor: categoryColor ?? "#7f7f7f",
+      })),
+    [rawLogs],
+  );
+
+  function invalidateLogs() {
+    utils.timeLog.list.invalidate();
+  }
+
+  const createCalendarSlot = trpc.timeLog.createCalendarSlot.useMutation({
+    onSuccess: () => invalidateLogs(),
+  });
+  const updateLog = trpc.timeLog.update.useMutation({ onSuccess: () => invalidateLogs() });
+  const stopTimer = trpc.timeLog.stopTimer.useMutation({ onSuccess: () => invalidateLogs() });
 
   function updateDraft(next: Draft | null) {
     draftRef.current = next;
@@ -160,8 +184,6 @@ export function WeekCalendar({
     };
   }, []);
 
-  const weekStart = useMemo(() => new Date(weekStartIso), [weekStartIso]);
-  const weekDays = useMemo(() => Array.from({ length: 7 }, (_, index) => addDays(weekStart, index)), [weekStart]);
   const now = new Date();
 
   const editingLog = logs.find((entry) => entry.id === editingLogId) ?? null;
@@ -190,17 +212,17 @@ export function WeekCalendar({
     };
   }
 
-  async function commitLogChange(entry: CalendarLog, dayIndex: number, startMinutes: number, endMinutes: number) {
+  function commitLogChange(entry: CalendarLog, dayIndex: number, startMinutes: number, endMinutes: number) {
     const dayDate = weekDays[dayIndex];
     const startedAt = addMinutes(startOfDay(dayDate), startMinutes);
     const endedAt = addMinutes(startOfDay(dayDate), endMinutes);
-    const formData = new FormData();
-    formData.set("id", entry.id);
-    if (entry.categoryId) formData.set("categoryId", entry.categoryId);
-    if (entry.title) formData.set("title", entry.title);
-    formData.set("startedAt", startedAt.toISOString());
-    formData.set("endedAt", endedAt.toISOString());
-    await updateLogAction(formData);
+    updateLog.mutate({
+      id: entry.id,
+      categoryId: entry.categoryId ?? undefined,
+      title: entry.title ?? undefined,
+      startedAt,
+      endedAt,
+    });
   }
 
   function applyGestureMove(gesture: Gesture, clientX: number, clientY: number) {
@@ -281,7 +303,7 @@ export function WeekCalendar({
 
       const { dayIndex, startMinutes, endMinutes } = finalDraft;
       updateDraft(null);
-      void commitLogChange(gesture.entry, dayIndex, startMinutes, endMinutes);
+      commitLogChange(gesture.entry, dayIndex, startMinutes, endMinutes);
     }
 
     window.addEventListener("pointermove", onWindowMove);
@@ -304,9 +326,21 @@ export function WeekCalendar({
             </DialogHeader>
             <form
               id="create-slot-form"
-              action={async (formData) => {
-                await createCalendarSlotAction(formData);
-                setOpen(false);
+              onSubmit={(event) => {
+                event.preventDefault();
+                const formData = new FormData(event.currentTarget);
+                const categoryId = String(formData.get("categoryId") || "") || undefined;
+                const title = String(formData.get("title") || "") || undefined;
+                createCalendarSlot.mutate(
+                  {
+                    categoryId,
+                    title,
+                    startedAt: new Date(selectedStart),
+                    endedAt: mode === "instant" ? new Date(selectedEnd) : undefined,
+                    mode,
+                  },
+                  { onSuccess: () => setOpen(false) },
+                );
               }}
               className="space-y-3"
             >
@@ -366,7 +400,12 @@ export function WeekCalendar({
               )}
             </form>
             <DialogFooter className="bg-transparent">
-              <Button type="submit" form="create-slot-form" className="rounded-[8px] bg-[#D0FF00] text-[#202609] hover:bg-[#D0FF00]/90">
+              <Button
+                type="submit"
+                form="create-slot-form"
+                disabled={createCalendarSlot.isPending}
+                className="rounded-[8px] bg-[#D0FF00] text-[#202609] hover:bg-[#D0FF00]/90"
+              >
                 Save slot
               </Button>
             </DialogFooter>
@@ -474,12 +513,16 @@ export function WeekCalendar({
                           {entry.categoryName}
                         </span>
                         {entry.isRunning ? (
-                          <form action={stopTimerAction} onClick={(event) => event.stopPropagation()}>
-                            <input type="hidden" name="logId" value={entry.id} />
-                            <button className="text-[#FF5C5C]" type="submit">
-                              <Square className="size-3 fill-current" />
-                            </button>
-                          </form>
+                          <button
+                            className="text-[#FF5C5C]"
+                            type="button"
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              stopTimer.mutate({ logId: entry.id });
+                            }}
+                          >
+                            <Square className="size-3 fill-current" />
+                          </button>
                         ) : (
                           <span className="text-[#9b9b9b]">
                             {format(addMinutes(startOfDay(weekDays[display.dayIndex]), display.endMinutes), "HH:mm")}

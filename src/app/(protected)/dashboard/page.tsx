@@ -1,11 +1,8 @@
 import { format } from "date-fns";
 import { cookies } from "next/headers";
-import { startTimerAction, stopTimerAction } from "@/app/(protected)/actions";
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
+import { QuickStartCard, TimerControls } from "@/components/dashboard/timer-controls";
 import { formatDuration } from "@/lib/time";
 import { requireUser } from "@/server/auth/session";
 import { getDashboardSummary } from "@/server/services/dashboard-service";
@@ -27,15 +24,7 @@ export default async function DashboardPage() {
         <CardContent className="space-y-4">
           <p className="text-4xl font-bold text-violet-600">{formatDuration(summary.totalSeconds)}</p>
           <p className="text-sm text-slate-500">Total logged time today</p>
-          {summary.runningTimer ? (
-            <form action={stopTimerAction} className="flex items-center gap-2">
-              <input type="hidden" name="logId" value={summary.runningTimer.id} />
-              <Badge className="bg-emerald-500 text-white">Running</Badge>
-              <Button type="submit" className="rounded-full">Stop Timer</Button>
-            </form>
-          ) : (
-            <p className="text-sm text-slate-500">No timer running now</p>
-          )}
+          <TimerControls runningTimerId={summary.runningTimer?.id ?? null} />
         </CardContent>
       </Card>
 
@@ -44,19 +33,7 @@ export default async function DashboardPage() {
           <CardTitle>Quick start timer</CardTitle>
         </CardHeader>
         <CardContent>
-          <form action={startTimerAction} className="space-y-3">
-            <Label>Category</Label>
-            <select name="categoryId" defaultValue="" className="w-full rounded-md border bg-white px-3 py-2 text-sm">
-              <option value="">No category</option>
-              {categories.map((category) => (
-                <option key={category.id} value={category.id}>
-                  {category.name}
-                </option>
-              ))}
-            </select>
-            <Input name="title" placeholder="Title (optional)" />
-            <Button type="submit" className="w-full rounded-full">Start</Button>
-          </form>
+          <QuickStartCard categories={categories} />
         </CardContent>
       </Card>
 
