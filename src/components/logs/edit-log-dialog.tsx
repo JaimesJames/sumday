@@ -25,21 +25,25 @@ export function EditLogDialog({
   onOpenChange: (open: boolean) => void;
 }) {
   const utils = trpc.useUtils();
+  function invalidateLogs() {
+    utils.timeLog.list.invalidate();
+    utils.dashboard.summary.invalidate();
+  }
   const updateLog = trpc.timeLog.update.useMutation({
     onSuccess: () => {
-      utils.timeLog.list.invalidate();
+      invalidateLogs();
       onOpenChange(false);
     },
   });
   const updateRunningLog = trpc.timeLog.updateRunning.useMutation({
     onSuccess: () => {
-      utils.timeLog.list.invalidate();
+      invalidateLogs();
       onOpenChange(false);
     },
   });
   const deleteLog = trpc.timeLog.delete.useMutation({
     onSuccess: () => {
-      utils.timeLog.list.invalidate();
+      invalidateLogs();
       onOpenChange(false);
     },
   });

@@ -165,6 +165,7 @@ export function WeekCalendar({ weekStartIso }: { weekStartIso: string }) {
 
   function invalidateLogs() {
     utils.timeLog.list.invalidate();
+    utils.dashboard.summary.invalidate();
   }
 
   const createCalendarSlot = trpc.timeLog.createCalendarSlot.useMutation({

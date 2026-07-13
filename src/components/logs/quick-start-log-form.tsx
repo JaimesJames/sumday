@@ -14,6 +14,7 @@ export function QuickStartLogForm() {
   const startTimer = trpc.timeLog.startTimer.useMutation({
     onSuccess: () => {
       utils.timeLog.list.invalidate();
+      utils.dashboard.summary.invalidate();
       formRef.current?.reset();
     },
   });

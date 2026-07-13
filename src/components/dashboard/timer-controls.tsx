@@ -1,6 +1,5 @@
 "use client";
 
-import { useRouter } from "next/navigation";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -9,15 +8,16 @@ import { trpc } from "@/trpc/react";
 
 type Category = { id: string; name: string; color: string };
 
+function invalidateTimerState(utils: ReturnType<typeof trpc.useUtils>) {
+  utils.timeLog.list.invalidate();
+  utils.dashboard.summary.invalidate();
+}
+
 export function TimerControls({ runningTimerId }: { runningTimerId: string | null }) {
-  const router = useRouter();
   const utils = trpc.useUtils();
 
   const stopTimer = trpc.timeLog.stopTimer.useMutation({
-    onSuccess: () => {
-      utils.timeLog.list.invalidate();
-      router.refresh();
-    },
+    onSuccess: () => invalidateTimerState(utils),
   });
 
   if (runningTimerId) {
@@ -36,20 +36,14 @@ export function TimerControls({ runningTimerId }: { runningTimerId: string | nul
     );
   }
 
-  return (
-    <p className="text-sm text-slate-500">No timer running now</p>
-  );
+  return <p className="text-sm text-slate-500">No timer running now</p>;
 }
 
 export function QuickStartCard({ categories }: { categories: Category[] }) {
-  const router = useRouter();
   const utils = trpc.useUtils();
 
   const startTimer = trpc.timeLog.startTimer.useMutation({
-    onSuccess: () => {
-      utils.timeLog.list.invalidate();
-      router.refresh();
-    },
+    onSuccess: () => invalidateTimerState(utils),
   });
 
   return (
