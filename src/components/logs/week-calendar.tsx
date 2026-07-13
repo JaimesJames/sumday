@@ -277,6 +277,22 @@ export function WeekCalendar({ weekStartIso }: { weekStartIso: string }) {
     };
     gestureRef.current = gesture;
 
+    // Resize never changes which day column the entry belongs to, so capture
+    // is safe here (unlike "move", where crossing into a different day
+    // column unmounts/remounts the DOM node and would silently kill a
+    // capture bound to it). Without capture, releasing the pointer after a
+    // resize can land the browser's synthetic click on whatever is under the
+    // cursor at that instant (the empty day-column cell), which incorrectly
+    // opens the create-slot dialog.
+    const captureTarget = event.currentTarget;
+    if (kind !== "move") {
+      try {
+        captureTarget.setPointerCapture(event.pointerId);
+      } catch {
+        // Ignore — worst case we fall back to no-capture behavior.
+      }
+    }
+
     // Track on window, not the entry element: moving the block to a different
     // day column unmounts/remounts its DOM node (different parent in the JSX
     // tree), which would silently kill pointer capture/listeners bound to it.
@@ -289,6 +305,11 @@ export function WeekCalendar({ weekStartIso }: { weekStartIso: string }) {
       window.removeEventListener("pointermove", onWindowMove);
       window.removeEventListener("pointerup", onWindowUp);
       window.removeEventListener("pointercancel", onWindowUp);
+      try {
+        captureTarget.releasePointerCapture(gesture.pointerId);
+      } catch {
+        // No-op if capture was never established.
+      }
       gestureCleanupRef.current = null;
     }
 
