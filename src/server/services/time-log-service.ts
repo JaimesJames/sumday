@@ -18,11 +18,26 @@ type CalendarSlotInput = z.infer<typeof calendarSlotSchema>;
 type RunningLogUpdateInput = z.infer<typeof runningLogUpdateSchema>;
 
 const RUNNING_TIMER_ERROR = "You already have a running timer.";
+const START_TIMER_FAILED_ERROR = "Could not start the timer. Please try again.";
 
-function isUniqueViolation(error: unknown): boolean {
-  const code = (error as { code?: string; cause?: { code?: string } })?.cause?.code
-    ?? (error as { code?: string })?.code;
-  return code === "23505";
+// Never leak raw DB errors (query text, params, stack traces) to the client.
+// If the running-timer insert fails for any reason, re-check whether a timer
+// is now running (covers the race where two inserts both pass the earlier
+// SELECT check and one loses to the one-running-timer-per-user constraint,
+// regardless of exactly how the driver/pooler surfaces that failure) and
+// report the friendly message; otherwise log server-side and report a safe
+// generic message.
+async function handleStartInsertFailure(userId: string, error: unknown): Promise<never> {
+  const [stillRunning] = await db
+    .select({ id: timeLogs.id })
+    .from(timeLogs)
+    .where(and(eq(timeLogs.userId, userId), eq(timeLogs.isRunning, true)))
+    .limit(1);
+  if (stillRunning) {
+    throw new Error(RUNNING_TIMER_ERROR);
+  }
+  console.error("[time-log-service] running-timer insert failed", error);
+  throw new Error(START_TIMER_FAILED_ERROR);
 }
 
 async function ensureCategoryOwnership(userId: string, categoryId: string) {
@@ -109,10 +124,7 @@ export async function startTimer(userId: string, input: StartTimerInput) {
       .returning();
     return created;
   } catch (error) {
-    if (isUniqueViolation(error)) {
-      throw new Error(RUNNING_TIMER_ERROR);
-    }
-    throw error;
+    return handleStartInsertFailure(userId, error);
   }
 }
 
@@ -173,10 +185,7 @@ export async function createCalendarSlot(userId: string, input: CalendarSlotInpu
         .returning();
       return createdRunning;
     } catch (error) {
-      if (isUniqueViolation(error)) {
-        throw new Error(RUNNING_TIMER_ERROR);
-      }
-      throw error;
+      return handleStartInsertFailure(userId, error);
     }
   }
 
