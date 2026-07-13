@@ -5,6 +5,7 @@ import { categories, timeLogs } from "@/server/db/schema";
 import {
   calendarSlotSchema,
   manualLogSchema,
+  runningLogUpdateSchema,
   startTimerSchema,
   stopTimerSchema,
 } from "@/server/validators/time-log";
@@ -36,14 +37,16 @@ export async function listTimeLogs(
       categoryColor: categories.color,
     })
     .from(timeLogs)
-    .innerJoin(categories, eq(categories.id, timeLogs.categoryId))
+    .leftJoin(categories, eq(categories.id, timeLogs.categoryId))
     .where(and(...conditions))
     .orderBy(desc(timeLogs.startedAt));
 }
 
 export async function createManualLog(userId: string, rawInput: unknown) {
   const input = manualLogSchema.parse(rawInput);
-  await ensureCategoryOwnership(userId, input.categoryId);
+  if (input.categoryId) {
+    await ensureCategoryOwnership(userId, input.categoryId);
+  }
 
   const durationSeconds = differenceInSeconds(input.endedAt, input.startedAt);
   const [created] = await db
@@ -64,7 +67,9 @@ export async function createManualLog(userId: string, rawInput: unknown) {
 
 export async function startTimer(userId: string, rawInput: unknown) {
   const input = startTimerSchema.parse(rawInput);
-  await ensureCategoryOwnership(userId, input.categoryId);
+  if (input.categoryId) {
+    await ensureCategoryOwnership(userId, input.categoryId);
+  }
 
   const [running] = await db
     .select({ id: timeLogs.id })
@@ -120,7 +125,9 @@ export async function stopTimer(userId: string, rawInput: unknown) {
 
 export async function createCalendarSlot(userId: string, rawInput: unknown) {
   const input = calendarSlotSchema.parse(rawInput);
-  await ensureCategoryOwnership(userId, input.categoryId);
+  if (input.categoryId) {
+    await ensureCategoryOwnership(userId, input.categoryId);
+  }
 
   if (input.mode === "running") {
     const [running] = await db
@@ -168,15 +175,17 @@ export async function createCalendarSlot(userId: string, rawInput: unknown) {
 
 export async function updateLog(userId: string, logId: string, rawInput: unknown) {
   const input = manualLogSchema.parse(rawInput);
-  await ensureCategoryOwnership(userId, input.categoryId);
+  if (input.categoryId) {
+    await ensureCategoryOwnership(userId, input.categoryId);
+  }
   const durationSeconds = differenceInSeconds(input.endedAt, input.startedAt);
 
   const [updated] = await db
     .update(timeLogs)
     .set({
-      categoryId: input.categoryId,
-      title: input.title,
-      note: input.note,
+      categoryId: input.categoryId ?? null,
+      title: input.title ?? null,
+      note: input.note ?? null,
       startedAt: input.startedAt,
       endedAt: input.endedAt,
       durationSeconds,
@@ -184,6 +193,31 @@ export async function updateLog(userId: string, logId: string, rawInput: unknown
       updatedAt: new Date(),
     })
     .where(and(eq(timeLogs.id, logId), eq(timeLogs.userId, userId)))
+    .returning();
+  return updated;
+}
+
+export async function updateRunningLog(userId: string, logId: string, rawInput: unknown) {
+  const input = runningLogUpdateSchema.parse(rawInput);
+  if (input.categoryId) {
+    await ensureCategoryOwnership(userId, input.categoryId);
+  }
+
+  const [updated] = await db
+    .update(timeLogs)
+    .set({
+      categoryId: input.categoryId ?? null,
+      title: input.title ?? null,
+      note: input.note ?? null,
+      updatedAt: new Date(),
+    })
+    .where(
+      and(
+        eq(timeLogs.id, logId),
+        eq(timeLogs.userId, userId),
+        eq(timeLogs.isRunning, true),
+      ),
+    )
     .returning();
   return updated;
 }

@@ -1,0 +1,27 @@
+{
+  "version": "7",
+  "dialect": "postgresql",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "7",
+      "when": 1783845206332,
+      "tag": "0000_deep_millenium_guard",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1783845454974,
+      "tag": "0001_robust_landau",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1783864784166,
+      "tag": "0002_material_blade",
+      "breakpoints": true
+    }
+  ]
+}

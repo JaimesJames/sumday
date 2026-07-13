@@ -2,7 +2,7 @@ import { z } from "zod";
 
 export const manualLogSchema = z
   .object({
-    categoryId: z.string().uuid(),
+    categoryId: z.string().uuid().optional(),
     title: z.string().max(140).optional(),
     note: z.string().max(1000).optional(),
     startedAt: z.coerce.date(),
@@ -14,7 +14,7 @@ export const manualLogSchema = z
   });
 
 export const startTimerSchema = z.object({
-  categoryId: z.string().uuid(),
+  categoryId: z.string().uuid().optional(),
   title: z.string().max(140).optional(),
   note: z.string().max(1000).optional(),
 });
@@ -23,9 +23,15 @@ export const stopTimerSchema = z.object({
   logId: z.string().uuid(),
 });
 
+export const runningLogUpdateSchema = z.object({
+  categoryId: z.string().uuid().optional(),
+  title: z.string().max(140).optional(),
+  note: z.string().max(1000).optional(),
+});
+
 export const calendarSlotSchema = z
   .object({
-    categoryId: z.string().uuid(),
+    categoryId: z.string().uuid().optional(),
     title: z.string().max(140).optional(),
     note: z.string().max(1000).optional(),
     startedAt: z.coerce.date(),
