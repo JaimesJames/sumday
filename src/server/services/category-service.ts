@@ -1,7 +1,10 @@
 import { and, asc, eq } from "drizzle-orm";
+import type { z } from "zod";
 import { db } from "@/server/db";
 import { categories, timeLogs } from "@/server/db/schema";
-import { categorySchema } from "@/server/validators/category";
+import type { categorySchema } from "@/server/validators/category";
+
+type CategoryInput = z.infer<typeof categorySchema>;
 
 export async function listCategories(userId: string) {
   return db
@@ -11,8 +14,7 @@ export async function listCategories(userId: string) {
     .orderBy(asc(categories.name));
 }
 
-export async function createCategory(userId: string, rawInput: unknown) {
-  const input = categorySchema.parse(rawInput);
+export async function createCategory(userId: string, input: CategoryInput) {
   const [created] = await db
     .insert(categories)
     .values({ userId, ...input })
@@ -23,9 +25,8 @@ export async function createCategory(userId: string, rawInput: unknown) {
 export async function updateCategory(
   userId: string,
   categoryId: string,
-  rawInput: unknown,
+  input: CategoryInput,
 ) {
-  const input = categorySchema.parse(rawInput);
   const [updated] = await db
     .update(categories)
     .set({ ...input, updatedAt: new Date() })

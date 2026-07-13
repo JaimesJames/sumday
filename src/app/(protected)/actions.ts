@@ -4,11 +4,6 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { requireUser } from "@/server/auth/session";
 import {
-  createCategory,
-  deleteCategory,
-  updateCategory,
-} from "@/server/services/category-service";
-import {
   createCalendarSlot,
   createManualLog,
   deleteLog,
@@ -26,31 +21,6 @@ import {
   setCommitmentStatus,
 } from "@/server/services/money-service";
 import { syncMoneyCommitmentsToGoogle } from "@/server/services/google-calendar-service";
-
-export async function createCategoryAction(formData: FormData) {
-  const user = await requireUser();
-  await createCategory(user.id, {
-    name: formData.get("name"),
-    color: formData.get("color"),
-  });
-  revalidatePath("/categories");
-  revalidatePath("/dashboard");
-}
-
-export async function updateCategoryAction(formData: FormData) {
-  const user = await requireUser();
-  await updateCategory(user.id, String(formData.get("id")), {
-    name: formData.get("name"),
-    color: formData.get("color"),
-  });
-  revalidatePath("/categories");
-}
-
-export async function deleteCategoryAction(formData: FormData) {
-  const user = await requireUser();
-  await deleteCategory(user.id, String(formData.get("id")));
-  revalidatePath("/categories");
-}
 
 export async function createLogAction(formData: FormData) {
   const user = await requireUser();
