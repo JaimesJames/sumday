@@ -1,22 +1,37 @@
 "use client";
 
-import { useActionState } from "react";
-import { registerAction } from "@/app/(auth)/actions";
+import { useRouter } from "next/navigation";
+import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-
-const initialState = { error: null };
+import { trpc } from "@/trpc/react";
 
 export function RegisterForm() {
-  const [state, formAction, isPending] = useActionState(registerAction, initialState);
+  const router = useRouter();
+  const [error, setError] = useState<string | null>(null);
+
+  const register = trpc.auth.register.useMutation({
+    onSuccess: (data) => {
+      router.push(data.upgradedGoogleAccount ? "/login?registered=true&fromGoogle=true" : "/login?registered=true");
+    },
+    onError: (err) => {
+      setError(err.message || "Please provide a valid name, email, and password (minimum 8 characters).");
+    },
+  });
 
   return (
     <form
-      action={formAction}
       className="space-y-4"
-      onSubmit={() => {
-        console.info("[register] form submit handler fired");
+      onSubmit={(event) => {
+        event.preventDefault();
+        setError(null);
+        const formData = new FormData(event.currentTarget);
+        register.mutate({
+          name: String(formData.get("name") || ""),
+          email: String(formData.get("email") || ""),
+          password: String(formData.get("password") || ""),
+        });
       }}
     >
       <div className="space-y-2">
@@ -31,14 +46,9 @@ export function RegisterForm() {
         <Label htmlFor="password">Password</Label>
         <Input id="password" name="password" type="password" required />
       </div>
-      {state.error ? <p className="text-sm text-red-500">{state.error}</p> : null}
-      <Button
-        type="submit"
-        className="w-full rounded-full"
-        disabled={isPending}
-        onClick={() => console.info("[register] sign-up button clicked")}
-      >
-        {isPending ? "Signing up..." : "Sign up"}
+      {error ? <p className="text-sm text-red-500">{error}</p> : null}
+      <Button type="submit" className="w-full rounded-full" disabled={register.isPending}>
+        {register.isPending ? "Signing up..." : "Sign up"}
       </Button>
     </form>
   );

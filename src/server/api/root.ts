@@ -1,4 +1,5 @@
 import { createCallerFactory, createTRPCRouter } from "@/server/api/trpc";
+import { authRouter } from "@/server/api/routers/auth";
 import { calendarRouter } from "@/server/api/routers/calendar";
 import { categoryRouter } from "@/server/api/routers/category";
 import { dashboardRouter } from "@/server/api/routers/dashboard";
@@ -11,6 +12,7 @@ export const appRouter = createTRPCRouter({
   money: moneyRouter,
   calendar: calendarRouter,
   dashboard: dashboardRouter,
+  auth: authRouter,
 });
 
 export type AppRouter = typeof appRouter;
