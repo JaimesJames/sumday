@@ -1,9 +1,11 @@
 "use client";
 
-import { addDays, addMinutes, differenceInMinutes, endOfWeek, format, startOfDay } from "date-fns";
+import { addDays, addMinutes, differenceInMinutes, differenceInSeconds, endOfWeek, format, startOfDay } from "date-fns";
 import { Plus, Square } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
+import type { inferRouterOutputs } from "@trpc/server";
+import type { z } from "zod";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -16,6 +18,26 @@ import {
 import { Input } from "@/components/ui/input";
 import { EditLogDialog } from "@/components/logs/edit-log-dialog";
 import { trpc } from "@/trpc/react";
+import type { AppRouter } from "@/server/api/root";
+import type {
+  calendarSlotSchema,
+  manualLogSchema,
+  runningLogUpdateSchema,
+  stopTimerSchema,
+} from "@/server/validators/time-log";
+
+type RouterOutputs = inferRouterOutputs<AppRouter>;
+type LogListItem = RouterOutputs["timeLog"]["list"][number];
+
+// tRPC's client-side `.mutate()` accepts the schema's *input* (pre-coercion)
+// shape, not its output — for `z.coerce.date()` fields that's `unknown`
+// since coerce accepts a wide range of raw values. We only ever call these
+// mutations from this file with real Date objects, so it's safe to treat
+// the relevant fields as Date below (with a narrow cast at the point of use).
+type CreateCalendarSlotInput = z.input<typeof calendarSlotSchema>;
+type UpdateLogInput = z.input<typeof manualLogSchema> & { id: string };
+type UpdateRunningLogInput = z.input<typeof runningLogUpdateSchema> & { id: string };
+type StopTimerInput = z.input<typeof stopTimerSchema>;
 
 export type CalendarCategory = {
   id: string;
@@ -108,6 +130,24 @@ function computeOverlapLayout(
   return layout;
 }
 
+function withUpdatedLog(
+  list: LogListItem[] | undefined,
+  logId: string,
+  updater: (item: LogListItem) => LogListItem,
+): LogListItem[] | undefined {
+  if (!list) return list;
+  return list.map((item) => (item.log.id === logId ? updater(item) : item));
+}
+
+function withoutLog(list: LogListItem[] | undefined, logId: string): LogListItem[] | undefined {
+  if (!list) return list;
+  return list.filter((item) => item.log.id !== logId);
+}
+
+function withInsertedLog(list: LogListItem[] | undefined, item: LogListItem): LogListItem[] {
+  return [item, ...(list ?? [])];
+}
+
 type DragKind = "move" | "resize-top" | "resize-bottom";
 
 type Draft = {
@@ -145,10 +185,11 @@ export function WeekCalendar({ weekStartIso }: { weekStartIso: string }) {
   const weekStart = useMemo(() => new Date(weekStartIso), [weekStartIso]);
   const weekEnd = useMemo(() => endOfWeek(weekStart, { weekStartsOn: 1 }), [weekStart]);
   const weekDays = useMemo(() => Array.from({ length: 7 }, (_, index) => addDays(weekStart, index)), [weekStart]);
+  const listInput = { from: weekStart, to: weekEnd };
 
   const utils = trpc.useUtils();
   const { data: categories = [] } = trpc.category.list.useQuery();
-  const { data: rawLogs = [] } = trpc.timeLog.list.useQuery({ from: weekStart, to: weekEnd });
+  const { data: rawLogs = [] } = trpc.timeLog.list.useQuery(listInput);
   const logs: CalendarLog[] = useMemo(
     () =>
       rawLogs.map(({ log, categoryName, categoryColor }) => ({
@@ -169,12 +210,139 @@ export function WeekCalendar({ weekStartIso }: { weekStartIso: string }) {
     utils.dashboard.summary.invalidate();
   }
 
+  async function snapshotAndCancel() {
+    await utils.timeLog.list.cancel(listInput);
+    return utils.timeLog.list.getData(listInput);
+  }
+
+  function rollback(previous: LogListItem[] | undefined) {
+    if (previous) utils.timeLog.list.setData(listInput, previous);
+  }
+
+  function findCategory(categoryId: string | undefined) {
+    return categoryId ? categories.find((category) => category.id === categoryId) : undefined;
+  }
+
   const createCalendarSlot = trpc.timeLog.createCalendarSlot.useMutation({
-    onSuccess: () => invalidateLogs(),
-    onError: (error) => toast.error(error.message),
+    onMutate: async (input: CreateCalendarSlotInput) => {
+      const previous = await snapshotAndCancel();
+      const category = findCategory(input.categoryId);
+      const isRunningMode = input.mode === "running";
+      const startedAt = input.startedAt as Date;
+      const endedAt = input.endedAt as Date | undefined;
+      const optimisticItem: LogListItem = {
+        log: {
+          id: `optimistic-${Date.now()}`,
+          userId: "",
+          categoryId: input.categoryId ?? null,
+          title: input.title ?? null,
+          note: null,
+          startedAt,
+          endedAt: isRunningMode ? null : (endedAt ?? null),
+          durationSeconds: !isRunningMode && endedAt ? differenceInSeconds(endedAt, startedAt) : null,
+          isRunning: isRunningMode,
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        },
+        categoryName: category?.name ?? null,
+        categoryColor: category?.color ?? null,
+      };
+      utils.timeLog.list.setData(listInput, (old) => withInsertedLog(old, optimisticItem));
+      return { previous };
+    },
+    onError: (error, _input, context) => {
+      rollback(context?.previous);
+      toast.error(error.message);
+    },
+    onSettled: () => invalidateLogs(),
   });
-  const updateLog = trpc.timeLog.update.useMutation({ onSuccess: () => invalidateLogs() });
-  const stopTimer = trpc.timeLog.stopTimer.useMutation({ onSuccess: () => invalidateLogs() });
+
+  const updateLog = trpc.timeLog.update.useMutation({
+    onMutate: async (input: UpdateLogInput) => {
+      const previous = await snapshotAndCancel();
+      const category = findCategory(input.categoryId);
+      const startedAt = input.startedAt as Date;
+      const endedAt = input.endedAt as Date;
+      utils.timeLog.list.setData(listInput, (old) =>
+        withUpdatedLog(old, input.id, (item) => ({
+          log: {
+            ...item.log,
+            categoryId: input.categoryId ?? null,
+            title: input.title ?? null,
+            startedAt,
+            endedAt,
+            durationSeconds: differenceInSeconds(endedAt, startedAt),
+            isRunning: false,
+          },
+          categoryName: category?.name ?? null,
+          categoryColor: category?.color ?? null,
+        })),
+      );
+      return { previous };
+    },
+    onError: (error, _input, context) => {
+      rollback(context?.previous);
+      toast.error(error.message);
+    },
+    onSettled: () => invalidateLogs(),
+  });
+
+  const updateRunningLog = trpc.timeLog.updateRunning.useMutation({
+    onMutate: async (input: UpdateRunningLogInput) => {
+      const previous = await snapshotAndCancel();
+      const category = findCategory(input.categoryId);
+      utils.timeLog.list.setData(listInput, (old) =>
+        withUpdatedLog(old, input.id, (item) => ({
+          log: { ...item.log, categoryId: input.categoryId ?? null, title: input.title ?? null },
+          categoryName: category?.name ?? null,
+          categoryColor: category?.color ?? null,
+        })),
+      );
+      return { previous };
+    },
+    onError: (error, _input, context) => {
+      rollback(context?.previous);
+      toast.error(error.message);
+    },
+    onSettled: () => invalidateLogs(),
+  });
+
+  const deleteLog = trpc.timeLog.delete.useMutation({
+    onMutate: async (input: { id: string }) => {
+      const previous = await snapshotAndCancel();
+      utils.timeLog.list.setData(listInput, (old) => withoutLog(old, input.id));
+      return { previous };
+    },
+    onError: (error, _input, context) => {
+      rollback(context?.previous);
+      toast.error(error.message);
+    },
+    onSettled: () => invalidateLogs(),
+  });
+
+  const stopTimer = trpc.timeLog.stopTimer.useMutation({
+    onMutate: async (input: StopTimerInput) => {
+      const previous = await snapshotAndCancel();
+      const stoppedAt = new Date();
+      utils.timeLog.list.setData(listInput, (old) =>
+        withUpdatedLog(old, input.logId, (item) => ({
+          ...item,
+          log: {
+            ...item.log,
+            endedAt: stoppedAt,
+            durationSeconds: differenceInSeconds(stoppedAt, item.log.startedAt),
+            isRunning: false,
+          },
+        })),
+      );
+      return { previous };
+    },
+    onError: (error, _input, context) => {
+      rollback(context?.previous);
+      toast.error(error.message);
+    },
+    onSettled: () => invalidateLogs(),
+  });
 
   function updateDraft(next: Draft | null) {
     draftRef.current = next;
@@ -355,16 +523,14 @@ export function WeekCalendar({ weekStartIso }: { weekStartIso: string }) {
                 const formData = new FormData(event.currentTarget);
                 const categoryId = String(formData.get("categoryId") || "") || undefined;
                 const title = String(formData.get("title") || "") || undefined;
-                createCalendarSlot.mutate(
-                  {
-                    categoryId,
-                    title,
-                    startedAt: new Date(selectedStart),
-                    endedAt: mode === "instant" ? new Date(selectedEnd) : undefined,
-                    mode,
-                  },
-                  { onSuccess: () => setOpen(false) },
-                );
+                createCalendarSlot.mutate({
+                  categoryId,
+                  title,
+                  startedAt: new Date(selectedStart),
+                  endedAt: mode === "instant" ? new Date(selectedEnd) : undefined,
+                  mode,
+                });
+                setOpen(false);
               }}
               className="space-y-3"
             >
@@ -427,7 +593,6 @@ export function WeekCalendar({ weekStartIso }: { weekStartIso: string }) {
               <Button
                 type="submit"
                 form="create-slot-form"
-                disabled={createCalendarSlot.isPending}
                 className="rounded-[8px] bg-[#D0FF00] text-[#202609] hover:bg-[#D0FF00]/90"
               >
                 Save slot
@@ -592,6 +757,20 @@ export function WeekCalendar({ weekStartIso }: { weekStartIso: string }) {
         onOpenChange={(nextOpen) => {
           if (!nextOpen) setEditingLogId(null);
         }}
+        onSave={(values) => {
+          if (values.isRunning) {
+            updateRunningLog.mutate({ id: values.id, categoryId: values.categoryId, title: values.title });
+          } else {
+            updateLog.mutate({
+              id: values.id,
+              categoryId: values.categoryId,
+              title: values.title,
+              startedAt: values.startedAt!,
+              endedAt: values.endedAt!,
+            });
+          }
+        }}
+        onDelete={(id) => deleteLog.mutate({ id })}
       />
     </div>
   );

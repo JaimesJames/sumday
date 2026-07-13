@@ -48,7 +48,7 @@ export default async function LogsPage({ searchParams }: LogsPageProps) {
       <Card className="flex min-h-0 flex-1 rounded-[28px] border border-[#3a3a3a] bg-[#2B2B2B] text-[#f1f1f1]">
         <CardContent className="flex min-h-0 flex-1 flex-col gap-6 p-4">
           <HydrateClient>
-            <QuickStartLogForm />
+            <QuickStartLogForm weekStartIso={weekStartParam} />
             <WeekCalendar weekStartIso={weekStartParam} />
           </HydrateClient>
         </CardContent>

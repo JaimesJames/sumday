@@ -11,48 +11,35 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import type { CalendarCategory, CalendarLog } from "@/components/logs/week-calendar";
-import { trpc } from "@/trpc/react";
+
+export type EditLogSaveValues = {
+  id: string;
+  isRunning: boolean;
+  categoryId?: string;
+  title?: string;
+  startedAt?: Date;
+  endedAt?: Date;
+};
 
 export function EditLogDialog({
   log,
   categories,
   open,
   onOpenChange,
+  onSave,
+  onDelete,
 }: {
   log: CalendarLog | null;
   categories: CalendarCategory[];
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  onSave: (values: EditLogSaveValues) => void;
+  onDelete: (id: string) => void;
 }) {
-  const utils = trpc.useUtils();
-  function invalidateLogs() {
-    utils.timeLog.list.invalidate();
-    utils.dashboard.summary.invalidate();
-  }
-  const updateLog = trpc.timeLog.update.useMutation({
-    onSuccess: () => {
-      invalidateLogs();
-      onOpenChange(false);
-    },
-  });
-  const updateRunningLog = trpc.timeLog.updateRunning.useMutation({
-    onSuccess: () => {
-      invalidateLogs();
-      onOpenChange(false);
-    },
-  });
-  const deleteLog = trpc.timeLog.delete.useMutation({
-    onSuccess: () => {
-      invalidateLogs();
-      onOpenChange(false);
-    },
-  });
-
   if (!log) return null;
 
   const startValue = format(new Date(log.startedAt), "yyyy-MM-dd'T'HH:mm");
   const endValue = log.endedAt ? format(new Date(log.endedAt), "yyyy-MM-dd'T'HH:mm") : "";
-  const isSaving = updateLog.isPending || updateRunningLog.isPending;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -67,13 +54,16 @@ export function EditLogDialog({
             const formData = new FormData(event.currentTarget);
             const categoryId = String(formData.get("categoryId") || "") || undefined;
             const title = String(formData.get("title") || "") || undefined;
+            // Optimistic: commit immediately and close, roll back if the
+            // mutation later fails (handled by the caller's cache update).
             if (log.isRunning) {
-              updateRunningLog.mutate({ id: log.id, categoryId, title });
-              return;
+              onSave({ id: log.id, isRunning: true, categoryId, title });
+            } else {
+              const startedAt = new Date(String(formData.get("startedAt")));
+              const endedAt = new Date(String(formData.get("endedAt")));
+              onSave({ id: log.id, isRunning: false, categoryId, title, startedAt, endedAt });
             }
-            const startedAt = new Date(String(formData.get("startedAt")));
-            const endedAt = new Date(String(formData.get("endedAt")));
-            updateLog.mutate({ id: log.id, categoryId, title, startedAt, endedAt });
+            onOpenChange(false);
           }}
           className="space-y-3"
         >
@@ -124,10 +114,10 @@ export function EditLogDialog({
           <Button
             type="button"
             variant="destructive"
-            disabled={deleteLog.isPending}
             onClick={() => {
               if (!window.confirm("Delete this log?")) return;
-              deleteLog.mutate({ id: log.id });
+              onDelete(log.id);
+              onOpenChange(false);
             }}
           >
             Delete
@@ -135,7 +125,6 @@ export function EditLogDialog({
           <Button
             type="submit"
             form="edit-slot-form"
-            disabled={isSaving}
             className="rounded-[8px] bg-[#D0FF00] text-[#202609] hover:bg-[#D0FF00]/90"
           >
             Save

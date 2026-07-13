@@ -1,35 +1,77 @@
 "use client";
 
+import { endOfWeek } from "date-fns";
+import type { inferRouterOutputs } from "@trpc/server";
+import type { z } from "zod";
 import { Play } from "lucide-react";
-import { useRef } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { trpc } from "@/trpc/react";
+import type { AppRouter } from "@/server/api/root";
+import type { startTimerSchema } from "@/server/validators/time-log";
 
-export function QuickStartLogForm() {
+type RouterOutputs = inferRouterOutputs<AppRouter>;
+type LogListItem = RouterOutputs["timeLog"]["list"][number];
+type StartTimerInput = z.infer<typeof startTimerSchema>;
+
+export function QuickStartLogForm({ weekStartIso }: { weekStartIso: string }) {
   const utils = trpc.useUtils();
   const { data: categories = [] } = trpc.category.list.useQuery();
-  const formRef = useRef<HTMLFormElement>(null);
+
+  const weekStart = new Date(weekStartIso);
+  const weekEnd = endOfWeek(weekStart, { weekStartsOn: 1 });
+  const listInput = { from: weekStart, to: weekEnd };
 
   const startTimer = trpc.timeLog.startTimer.useMutation({
-    onSuccess: () => {
+    onMutate: async (input: StartTimerInput) => {
+      const now = new Date();
+      // Starting a timer always begins "now" — only worth an optimistic
+      // insert if the currently viewed week actually contains today.
+      if (now < weekStart || now > weekEnd) return undefined;
+
+      await utils.timeLog.list.cancel(listInput);
+      const previous = utils.timeLog.list.getData(listInput);
+      const category = input.categoryId ? categories.find((c) => c.id === input.categoryId) : undefined;
+      const optimisticItem: LogListItem = {
+        log: {
+          id: `optimistic-${Date.now()}`,
+          userId: "",
+          categoryId: input.categoryId ?? null,
+          title: input.title ?? null,
+          note: null,
+          startedAt: now,
+          endedAt: null,
+          durationSeconds: null,
+          isRunning: true,
+          createdAt: now,
+          updatedAt: now,
+        },
+        categoryName: category?.name ?? null,
+        categoryColor: category?.color ?? null,
+      };
+      utils.timeLog.list.setData(listInput, (old) => [optimisticItem, ...(old ?? [])]);
+      return { previous };
+    },
+    onError: (error, _input, context) => {
+      if (context?.previous) utils.timeLog.list.setData(listInput, context.previous);
+      toast.error(error.message);
+    },
+    onSettled: () => {
       utils.timeLog.list.invalidate();
       utils.dashboard.summary.invalidate();
-      formRef.current?.reset();
     },
-    onError: (error) => toast.error(error.message),
   });
 
   return (
     <form
-      ref={formRef}
       onSubmit={(event) => {
         event.preventDefault();
         const formData = new FormData(event.currentTarget);
         const title = String(formData.get("title") || "") || undefined;
         const categoryId = String(formData.get("categoryId") || "") || undefined;
         startTimer.mutate({ title, categoryId });
+        event.currentTarget.reset();
       }}
       className="shrink-0 flex items-center gap-3 px-1 py-1"
     >
