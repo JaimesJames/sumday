@@ -1,9 +1,14 @@
 import { and, asc, desc, eq, gte, lte, sql } from "drizzle-orm";
+import type { z } from "zod";
 import { db } from "@/server/db";
 import { moneyCategories, moneyCommitments, moneyTransactions } from "@/server/db/schema";
 import { monthRange } from "@/lib/money";
-import { moneyCategorySchema, moneyCommitmentSchema, moneyTransactionSchema } from "@/server/validators/money";
+import type { moneyCategorySchema, moneyCommitmentSchema, moneyTransactionSchema } from "@/server/validators/money";
 import { expandCommitmentOccurrences } from "@/server/services/commitment-occurrences";
+
+type MoneyCategoryInput = z.infer<typeof moneyCategorySchema>;
+type MoneyTransactionInput = z.infer<typeof moneyTransactionSchema>;
+type MoneyCommitmentInput = z.infer<typeof moneyCommitmentSchema>;
 
 async function requireCategory(userId: string, categoryId: string, kind: "income" | "expense") {
   const [category] = await db.select().from(moneyCategories).where(and(eq(moneyCategories.id, categoryId), eq(moneyCategories.userId, userId))).limit(1);
@@ -24,8 +29,7 @@ export async function listMoneyCategories(userId: string) {
   return db.select().from(moneyCategories).where(eq(moneyCategories.userId, userId)).orderBy(asc(moneyCategories.name));
 }
 
-export async function createMoneyCategory(userId: string, raw: unknown) {
-  const input = moneyCategorySchema.parse(raw);
+export async function createMoneyCategory(userId: string, input: MoneyCategoryInput) {
   const [created] = await db.insert(moneyCategories).values({ userId, ...input }).returning();
   return created;
 }
@@ -48,8 +52,7 @@ export async function getMoneySummary(userId: string, month: string) {
   return { income, expense, net: income - expense };
 }
 
-export async function createMoneyTransaction(userId: string, raw: unknown) {
-  const input = moneyTransactionSchema.parse(raw);
+export async function createMoneyTransaction(userId: string, input: MoneyTransactionInput) {
   await requireCategory(userId, input.categoryId, input.kind);
   const [created] = await db.insert(moneyTransactions).values({ userId, ...input }).returning();
   return created;
@@ -65,8 +68,7 @@ export async function listMoneyCommitments(userId: string) {
     .where(eq(moneyCommitments.userId, userId)).orderBy(asc(moneyCommitments.firstDueOn));
 }
 
-export async function createMoneyCommitment(userId: string, raw: unknown) {
-  const input = moneyCommitmentSchema.parse(raw);
+export async function createMoneyCommitment(userId: string, input: MoneyCommitmentInput) {
   await requireCategory(userId, input.categoryId, input.kind);
   const [created] = await db.insert(moneyCommitments).values({
     userId, ...input, remainingInstallments: input.installmentCount ?? null,

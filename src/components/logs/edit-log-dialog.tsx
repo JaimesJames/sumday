@@ -1,7 +1,6 @@
 "use client";
 
 import { format } from "date-fns";
-import { updateLogAction, updateRunningLogAction } from "@/app/(protected)/actions";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -11,19 +10,31 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
-import { deleteLogAction } from "@/app/(protected)/actions";
 import type { CalendarCategory, CalendarLog } from "@/components/logs/week-calendar";
+
+export type EditLogSaveValues = {
+  id: string;
+  isRunning: boolean;
+  categoryId?: string;
+  title?: string;
+  startedAt?: Date;
+  endedAt?: Date;
+};
 
 export function EditLogDialog({
   log,
   categories,
   open,
   onOpenChange,
+  onSave,
+  onDelete,
 }: {
   log: CalendarLog | null;
   categories: CalendarCategory[];
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  onSave: (values: EditLogSaveValues) => void;
+  onDelete: (id: string) => void;
 }) {
   if (!log) return null;
 
@@ -38,17 +49,24 @@ export function EditLogDialog({
         </DialogHeader>
         <form
           id="edit-slot-form"
-          action={async (formData) => {
+          onSubmit={(event) => {
+            event.preventDefault();
+            const formData = new FormData(event.currentTarget);
+            const categoryId = String(formData.get("categoryId") || "") || undefined;
+            const title = String(formData.get("title") || "") || undefined;
+            // Optimistic: commit immediately and close, roll back if the
+            // mutation later fails (handled by the caller's cache update).
             if (log.isRunning) {
-              await updateRunningLogAction(formData);
+              onSave({ id: log.id, isRunning: true, categoryId, title });
             } else {
-              await updateLogAction(formData);
+              const startedAt = new Date(String(formData.get("startedAt")));
+              const endedAt = new Date(String(formData.get("endedAt")));
+              onSave({ id: log.id, isRunning: false, categoryId, title, startedAt, endedAt });
             }
             onOpenChange(false);
           }}
           className="space-y-3"
         >
-          <input type="hidden" name="id" value={log.id} />
           <select
             name="categoryId"
             defaultValue={log.categoryId ?? ""}
@@ -72,7 +90,7 @@ export function EditLogDialog({
             <Input
               type="datetime-local"
               name="startedAt"
-              required
+              required={!log.isRunning}
               defaultValue={startValue}
               disabled={log.isRunning}
               className="border-[#3f3f3f] bg-[#242424] text-[#f1f1f1] disabled:opacity-50"
@@ -96,11 +114,9 @@ export function EditLogDialog({
           <Button
             type="button"
             variant="destructive"
-            onClick={async () => {
+            onClick={() => {
               if (!window.confirm("Delete this log?")) return;
-              const fd = new FormData();
-              fd.set("id", log.id);
-              await deleteLogAction(fd);
+              onDelete(log.id);
               onOpenChange(false);
             }}
           >

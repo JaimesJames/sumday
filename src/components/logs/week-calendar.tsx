@@ -1,9 +1,20 @@
 "use client";
 
-import { addDays, addMinutes, differenceInMinutes, format, startOfDay } from "date-fns";
+import {
+  addDays,
+  addMinutes,
+  differenceInMinutes,
+  differenceInSeconds,
+  endOfWeek,
+  format,
+  isSameDay,
+  startOfDay,
+} from "date-fns";
 import { Plus, Square } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { createCalendarSlotAction, stopTimerAction, updateLogAction } from "@/app/(protected)/actions";
+import { toast } from "sonner";
+import type { inferRouterOutputs } from "@trpc/server";
+import type { z } from "zod";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -15,6 +26,27 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { EditLogDialog } from "@/components/logs/edit-log-dialog";
+import { trpc } from "@/trpc/react";
+import type { AppRouter } from "@/server/api/root";
+import type {
+  calendarSlotSchema,
+  manualLogSchema,
+  runningLogUpdateSchema,
+  stopTimerSchema,
+} from "@/server/validators/time-log";
+
+type RouterOutputs = inferRouterOutputs<AppRouter>;
+type LogListItem = RouterOutputs["timeLog"]["list"][number];
+
+// tRPC's client-side `.mutate()` accepts the schema's *input* (pre-coercion)
+// shape, not its output — for `z.coerce.date()` fields that's `unknown`
+// since coerce accepts a wide range of raw values. We only ever call these
+// mutations from this file with real Date objects, so it's safe to treat
+// the relevant fields as Date below (with a narrow cast at the point of use).
+type CreateCalendarSlotInput = z.input<typeof calendarSlotSchema>;
+type UpdateLogInput = z.input<typeof manualLogSchema> & { id: string };
+type UpdateRunningLogInput = z.input<typeof runningLogUpdateSchema> & { id: string };
+type StopTimerInput = z.input<typeof stopTimerSchema>;
 
 export type CalendarCategory = {
   id: string;
@@ -50,6 +82,16 @@ function snapMinutes(raw: number) {
 function yToMinutes(offsetY: number) {
   const raw = (offsetY / SLOT_HEIGHT) * 60;
   return clamp(snapMinutes(raw), 0, 1440);
+}
+
+function formatTrackedDuration(totalSeconds: number) {
+  const totalMinutes = Math.round(totalSeconds / 60);
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+
+  if (hours === 0) return `${minutes}m`;
+  if (minutes === 0) return `${hours}h`;
+  return `${hours}h ${minutes}m`;
 }
 
 function xToDayIndex(clientX: number, columnRects: (DOMRect | null)[], fallback: number) {
@@ -107,6 +149,24 @@ function computeOverlapLayout(
   return layout;
 }
 
+function withUpdatedLog(
+  list: LogListItem[] | undefined,
+  logId: string,
+  updater: (item: LogListItem) => LogListItem,
+): LogListItem[] | undefined {
+  if (!list) return list;
+  return list.map((item) => (item.log.id === logId ? updater(item) : item));
+}
+
+function withoutLog(list: LogListItem[] | undefined, logId: string): LogListItem[] | undefined {
+  if (!list) return list;
+  return list.filter((item) => item.log.id !== logId);
+}
+
+function withInsertedLog(list: LogListItem[] | undefined, item: LogListItem): LogListItem[] {
+  return [item, ...(list ?? [])];
+}
+
 type DragKind = "move" | "resize-top" | "resize-bottom";
 
 type Draft = {
@@ -129,15 +189,7 @@ type Gesture = {
   columnRects: (DOMRect | null)[];
 };
 
-export function WeekCalendar({
-  weekStartIso,
-  categories,
-  logs,
-}: {
-  weekStartIso: string;
-  categories: CalendarCategory[];
-  logs: CalendarLog[];
-}) {
+export function WeekCalendar({ weekStartIso }: { weekStartIso: string }) {
   const [open, setOpen] = useState(false);
   const [selectedStart, setSelectedStart] = useState(`${format(new Date(), "yyyy-MM-dd")}T09:00`);
   const [selectedEnd, setSelectedEnd] = useState(`${format(new Date(), "yyyy-MM-dd")}T10:00`);
@@ -148,6 +200,177 @@ export function WeekCalendar({
   const gestureRef = useRef<Gesture | null>(null);
   const dayColRefs = useRef<(HTMLDivElement | null)[]>([]);
   const gestureCleanupRef = useRef<(() => void) | null>(null);
+  const calendarScrollRef = useRef<HTMLDivElement | null>(null);
+  const hasAutoScrolledRef = useRef(false);
+  const [now, setNow] = useState(() => new Date());
+
+  const weekStart = useMemo(() => new Date(weekStartIso), [weekStartIso]);
+  const weekEnd = useMemo(() => endOfWeek(weekStart, { weekStartsOn: 1 }), [weekStart]);
+  const weekDays = useMemo(() => Array.from({ length: 7 }, (_, index) => addDays(weekStart, index)), [weekStart]);
+  const listInput = { from: weekStart, to: weekEnd };
+
+  const utils = trpc.useUtils();
+  const { data: categories = [] } = trpc.category.list.useQuery();
+  const { data: rawLogs = [] } = trpc.timeLog.list.useQuery(listInput);
+  const logs: CalendarLog[] = useMemo(
+    () =>
+      rawLogs.map(({ log, categoryName, categoryColor }) => ({
+        id: log.id,
+        title: log.title,
+        startedAt: log.startedAt.toISOString(),
+        endedAt: log.endedAt ? log.endedAt.toISOString() : null,
+        isRunning: log.isRunning,
+        categoryId: log.categoryId,
+        categoryName: categoryName ?? "No category",
+        categoryColor: categoryColor ?? "#7f7f7f",
+      })),
+    [rawLogs],
+  );
+
+  function invalidateLogs() {
+    utils.timeLog.list.invalidate();
+    utils.dashboard.summary.invalidate();
+  }
+
+  async function snapshotAndCancel() {
+    await utils.timeLog.list.cancel(listInput);
+    return utils.timeLog.list.getData(listInput);
+  }
+
+  function rollback(previous: LogListItem[] | undefined) {
+    if (previous) utils.timeLog.list.setData(listInput, previous);
+  }
+
+  function findCategory(categoryId: string | undefined) {
+    return categoryId ? categories.find((category) => category.id === categoryId) : undefined;
+  }
+
+  const createCalendarSlot = trpc.timeLog.createCalendarSlot.useMutation({
+    onMutate: async (input: CreateCalendarSlotInput) => {
+      const previous = await snapshotAndCancel();
+      const category = findCategory(input.categoryId);
+      const isRunningMode = input.mode === "running";
+      const startedAt = input.startedAt as Date;
+      const endedAt = input.endedAt as Date | undefined;
+      const optimisticItem: LogListItem = {
+        log: {
+          id: `optimistic-${Date.now()}`,
+          userId: "",
+          categoryId: input.categoryId ?? null,
+          title: input.title ?? null,
+          note: null,
+          startedAt,
+          endedAt: isRunningMode ? null : (endedAt ?? null),
+          durationSeconds: !isRunningMode && endedAt ? differenceInSeconds(endedAt, startedAt) : null,
+          isRunning: isRunningMode,
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        },
+        categoryName: category?.name ?? null,
+        categoryColor: category?.color ?? null,
+      };
+      utils.timeLog.list.setData(listInput, (old) => withInsertedLog(old, optimisticItem));
+      return { previous };
+    },
+    onError: (error, _input, context) => {
+      rollback(context?.previous);
+      toast.error(error.message);
+    },
+    onSettled: () => invalidateLogs(),
+  });
+
+  const updateLog = trpc.timeLog.update.useMutation({
+    onMutate: async (input: UpdateLogInput) => {
+      const previous = await snapshotAndCancel();
+      const category = findCategory(input.categoryId);
+      const startedAt = input.startedAt as Date;
+      const endedAt = input.endedAt as Date;
+      utils.timeLog.list.setData(listInput, (old) =>
+        withUpdatedLog(old, input.id, (item) => ({
+          log: {
+            ...item.log,
+            categoryId: input.categoryId ?? null,
+            title: input.title ?? null,
+            startedAt,
+            endedAt,
+            durationSeconds: differenceInSeconds(endedAt, startedAt),
+            isRunning: false,
+          },
+          categoryName: category?.name ?? null,
+          categoryColor: category?.color ?? null,
+        })),
+      );
+      // Keep the final drag/resize draft rendered until the optimistic cache
+      // contains the same position. Clearing it before the awaited query
+      // cancellation finishes briefly reveals the stale cached position.
+      if (draftRef.current?.id === input.id) {
+        updateDraft(null);
+      }
+      return { previous };
+    },
+    onError: (error, _input, context) => {
+      rollback(context?.previous);
+      toast.error(error.message);
+    },
+    onSettled: () => invalidateLogs(),
+  });
+
+  const updateRunningLog = trpc.timeLog.updateRunning.useMutation({
+    onMutate: async (input: UpdateRunningLogInput) => {
+      const previous = await snapshotAndCancel();
+      const category = findCategory(input.categoryId);
+      utils.timeLog.list.setData(listInput, (old) =>
+        withUpdatedLog(old, input.id, (item) => ({
+          log: { ...item.log, categoryId: input.categoryId ?? null, title: input.title ?? null },
+          categoryName: category?.name ?? null,
+          categoryColor: category?.color ?? null,
+        })),
+      );
+      return { previous };
+    },
+    onError: (error, _input, context) => {
+      rollback(context?.previous);
+      toast.error(error.message);
+    },
+    onSettled: () => invalidateLogs(),
+  });
+
+  const deleteLog = trpc.timeLog.delete.useMutation({
+    onMutate: async (input: { id: string }) => {
+      const previous = await snapshotAndCancel();
+      utils.timeLog.list.setData(listInput, (old) => withoutLog(old, input.id));
+      return { previous };
+    },
+    onError: (error, _input, context) => {
+      rollback(context?.previous);
+      toast.error(error.message);
+    },
+    onSettled: () => invalidateLogs(),
+  });
+
+  const stopTimer = trpc.timeLog.stopTimer.useMutation({
+    onMutate: async (input: StopTimerInput) => {
+      const previous = await snapshotAndCancel();
+      const stoppedAt = new Date();
+      utils.timeLog.list.setData(listInput, (old) =>
+        withUpdatedLog(old, input.logId, (item) => ({
+          ...item,
+          log: {
+            ...item.log,
+            endedAt: stoppedAt,
+            durationSeconds: differenceInSeconds(stoppedAt, item.log.startedAt),
+            isRunning: false,
+          },
+        })),
+      );
+      return { previous };
+    },
+    onError: (error, _input, context) => {
+      rollback(context?.previous);
+      toast.error(error.message);
+    },
+    onSettled: () => invalidateLogs(),
+  });
 
   function updateDraft(next: Draft | null) {
     draftRef.current = next;
@@ -160,9 +383,69 @@ export function WeekCalendar({
     };
   }, []);
 
-  const weekStart = useMemo(() => new Date(weekStartIso), [weekStartIso]);
-  const weekDays = useMemo(() => Array.from({ length: 7 }, (_, index) => addDays(weekStart, index)), [weekStart]);
-  const now = new Date();
+  useEffect(() => {
+    const updateNow = () => setNow(new Date());
+    updateNow();
+    const interval = window.setInterval(updateNow, 30_000);
+    return () => window.clearInterval(interval);
+  }, []);
+
+  const todayIndex = weekDays.findIndex((day) => isSameDay(day, now));
+  const nowMinutes = differenceInMinutes(now, startOfDay(now));
+
+  useEffect(() => {
+    if (todayIndex === -1 || hasAutoScrolledRef.current) return;
+    const scrollContainer = calendarScrollRef.current;
+    if (!scrollContainer) return;
+
+    const targetTop = (nowMinutes / 60) * SLOT_HEIGHT - scrollContainer.clientHeight / 3;
+    scrollContainer.scrollTop = Math.max(0, targetTop);
+    hasAutoScrolledRef.current = true;
+  }, [nowMinutes, todayIndex]);
+
+  const dailyTrackedSeconds = useMemo(
+    () =>
+      weekDays.map((day) => {
+        const dayStartMs = startOfDay(day).getTime();
+        const dayEndMs = addDays(startOfDay(day), 1).getTime();
+
+        return logs.reduce((total, entry) => {
+          const entryStartMs = new Date(entry.startedAt).getTime();
+          const entryEndMs = entry.endedAt ? new Date(entry.endedAt).getTime() : now.getTime();
+          const overlapStartMs = Math.max(entryStartMs, dayStartMs);
+          const overlapEndMs = Math.min(entryEndMs, dayEndMs);
+          return total + Math.max(0, Math.floor((overlapEndMs - overlapStartMs) / 1000));
+        }, 0);
+      }),
+    [logs, now, weekDays],
+  );
+  const weekTrackedSeconds = dailyTrackedSeconds.reduce((total, seconds) => total + seconds, 0);
+  const weeklyCategoryBreakdown = useMemo(() => {
+    const weekStartMs = startOfDay(weekDays[0]).getTime();
+    const weekEndMs = addDays(startOfDay(weekDays[6]), 1).getTime();
+    const categoryTotals = new Map<string, { name: string; color: string; seconds: number }>();
+
+    for (const entry of logs) {
+      const entryStartMs = new Date(entry.startedAt).getTime();
+      const entryEndMs = entry.endedAt ? new Date(entry.endedAt).getTime() : now.getTime();
+      const overlapStartMs = Math.max(entryStartMs, weekStartMs);
+      const overlapEndMs = Math.min(entryEndMs, weekEndMs);
+      const seconds = Math.max(0, Math.floor((overlapEndMs - overlapStartMs) / 1000));
+      if (seconds === 0) continue;
+
+      const key = entry.categoryId ?? "uncategorized";
+      const current = categoryTotals.get(key);
+      categoryTotals.set(key, {
+        name: entry.categoryId ? entry.categoryName : "No category",
+        color: entry.categoryId ? entry.categoryColor : "#7f7f7f",
+        seconds: (current?.seconds ?? 0) + seconds,
+      });
+    }
+
+    return [...categoryTotals.entries()]
+      .map(([id, category]) => ({ id, ...category }))
+      .sort((a, b) => b.seconds - a.seconds);
+  }, [logs, now, weekDays]);
 
   const editingLog = logs.find((entry) => entry.id === editingLogId) ?? null;
 
@@ -190,17 +473,17 @@ export function WeekCalendar({
     };
   }
 
-  async function commitLogChange(entry: CalendarLog, dayIndex: number, startMinutes: number, endMinutes: number) {
+  function commitLogChange(entry: CalendarLog, dayIndex: number, startMinutes: number, endMinutes: number) {
     const dayDate = weekDays[dayIndex];
     const startedAt = addMinutes(startOfDay(dayDate), startMinutes);
     const endedAt = addMinutes(startOfDay(dayDate), endMinutes);
-    const formData = new FormData();
-    formData.set("id", entry.id);
-    if (entry.categoryId) formData.set("categoryId", entry.categoryId);
-    if (entry.title) formData.set("title", entry.title);
-    formData.set("startedAt", startedAt.toISOString());
-    formData.set("endedAt", endedAt.toISOString());
-    await updateLogAction(formData);
+    updateLog.mutate({
+      id: entry.id,
+      categoryId: entry.categoryId ?? undefined,
+      title: entry.title ?? undefined,
+      startedAt,
+      endedAt,
+    });
   }
 
   function applyGestureMove(gesture: Gesture, clientX: number, clientY: number) {
@@ -252,6 +535,22 @@ export function WeekCalendar({
     };
     gestureRef.current = gesture;
 
+    // Resize never changes which day column the entry belongs to, so capture
+    // is safe here (unlike "move", where crossing into a different day
+    // column unmounts/remounts the DOM node and would silently kill a
+    // capture bound to it). Without capture, releasing the pointer after a
+    // resize can land the browser's synthetic click on whatever is under the
+    // cursor at that instant (the empty day-column cell), which incorrectly
+    // opens the create-slot dialog.
+    const captureTarget = event.currentTarget;
+    if (kind !== "move") {
+      try {
+        captureTarget.setPointerCapture(event.pointerId);
+      } catch {
+        // Ignore — worst case we fall back to no-capture behavior.
+      }
+    }
+
     // Track on window, not the entry element: moving the block to a different
     // day column unmounts/remounts its DOM node (different parent in the JSX
     // tree), which would silently kill pointer capture/listeners bound to it.
@@ -264,6 +563,11 @@ export function WeekCalendar({
       window.removeEventListener("pointermove", onWindowMove);
       window.removeEventListener("pointerup", onWindowUp);
       window.removeEventListener("pointercancel", onWindowUp);
+      try {
+        captureTarget.releasePointerCapture(gesture.pointerId);
+      } catch {
+        // No-op if capture was never established.
+      }
       gestureCleanupRef.current = null;
     }
 
@@ -280,8 +584,7 @@ export function WeekCalendar({
       }
 
       const { dayIndex, startMinutes, endMinutes } = finalDraft;
-      updateDraft(null);
-      void commitLogChange(gesture.entry, dayIndex, startMinutes, endMinutes);
+      commitLogChange(gesture.entry, dayIndex, startMinutes, endMinutes);
     }
 
     window.addEventListener("pointermove", onWindowMove);
@@ -292,8 +595,44 @@ export function WeekCalendar({
 
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-4">
-      <div className="flex items-center justify-end">
-        <Dialog open={open} onOpenChange={setOpen}>
+      <div className="relative">
+        <div className="w-full">
+          <div className="text-xs uppercase tracking-[0.16em] text-[#9f9f9f]">This week</div>
+          <div className="text-xl font-semibold tabular-nums text-[#f1f1f1]">
+            {formatTrackedDuration(weekTrackedSeconds)}
+            <span className="ml-2 text-xs font-normal text-[#9f9f9f]">logged</span>
+          </div>
+          <div
+            className="mt-2 flex h-2 w-full rounded-full bg-[#3a3a3a]"
+            role="list"
+            aria-label="Weekly time by category"
+          >
+            {weeklyCategoryBreakdown.map((category, index) => {
+              const percentage = weekTrackedSeconds > 0 ? (category.seconds / weekTrackedSeconds) * 100 : 0;
+              return (
+                <div
+                  key={category.id}
+                  className={`group/segment relative h-full min-w-[3px] outline-none ring-inset focus-visible:ring-2 focus-visible:ring-white ${
+                    index === 0 ? "rounded-l-full" : ""
+                  } ${index === weeklyCategoryBreakdown.length - 1 ? "rounded-r-full" : ""}`}
+                  style={{ width: `${percentage}%`, backgroundColor: category.color }}
+                  role="listitem"
+                  tabIndex={0}
+                  aria-label={`${category.name}: ${formatTrackedDuration(category.seconds)}, ${percentage.toFixed(1)}%`}
+                >
+                  <div className="pointer-events-none absolute bottom-[calc(100%+8px)] left-1/2 z-50 hidden -translate-x-1/2 whitespace-nowrap rounded-[8px] border border-[#454545] bg-[#202020] px-2.5 py-1.5 text-left text-[11px] text-[#f1f1f1] shadow-xl group-hover/segment:block group-focus-visible/segment:block">
+                    <div className="font-semibold">{category.name}</div>
+                    <div className="tabular-nums text-[#bdbdbd]">
+                      {formatTrackedDuration(category.seconds)} · {percentage.toFixed(1)}%
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+        <div className="absolute right-0 top-0">
+          <Dialog open={open} onOpenChange={setOpen}>
           <DialogTrigger render={<Button className="rounded-[8px] bg-[#D0FF00] text-[#202609] hover:bg-[#D0FF00]/90" />}>
             <Plus className="size-4" />
             Add slot
@@ -304,8 +643,18 @@ export function WeekCalendar({
             </DialogHeader>
             <form
               id="create-slot-form"
-              action={async (formData) => {
-                await createCalendarSlotAction(formData);
+              onSubmit={(event) => {
+                event.preventDefault();
+                const formData = new FormData(event.currentTarget);
+                const categoryId = String(formData.get("categoryId") || "") || undefined;
+                const title = String(formData.get("title") || "") || undefined;
+                createCalendarSlot.mutate({
+                  categoryId,
+                  title,
+                  startedAt: new Date(selectedStart),
+                  endedAt: mode === "instant" ? new Date(selectedEnd) : undefined,
+                  mode,
+                });
                 setOpen(false);
               }}
               className="space-y-3"
@@ -366,24 +715,38 @@ export function WeekCalendar({
               )}
             </form>
             <DialogFooter className="bg-transparent">
-              <Button type="submit" form="create-slot-form" className="rounded-[8px] bg-[#D0FF00] text-[#202609] hover:bg-[#D0FF00]/90">
+              <Button
+                type="submit"
+                form="create-slot-form"
+                className="rounded-[8px] bg-[#D0FF00] text-[#202609] hover:bg-[#D0FF00]/90"
+              >
                 Save slot
               </Button>
             </DialogFooter>
           </DialogContent>
-        </Dialog>
+          </Dialog>
+        </div>
       </div>
 
       <div
+        ref={calendarScrollRef}
         className="min-h-0 flex-1 overflow-auto rounded-[12px] border border-[#3a3a3a]"
         style={draft ? { userSelect: "none", WebkitUserSelect: "none" } : undefined}
       >
         <div className="grid min-w-[980px]" style={{ gridTemplateColumns: "70px repeat(7, minmax(0,1fr))" }}>
-          <div className="border-r border-[#3f3f3f]" />
-          {weekDays.map((day) => (
-            <div key={day.toISOString()} className="border-r border-[#3f3f3f] p-2 text-center text-xs last:border-r-0">
+          <div className="sticky top-0 z-40 border-r border-b border-[#3f3f3f] bg-[#2B2B2B]" />
+          {weekDays.map((day, dayIndex) => (
+            <div
+              key={day.toISOString()}
+              className={`sticky top-0 z-40 border-r border-b border-[#3f3f3f] p-2 text-center text-xs last:border-r-0 ${
+                dayIndex === todayIndex ? "bg-[#31351f]" : "bg-[#2B2B2B]"
+              }`}
+            >
               <div className="text-[#f1f1f1]">{format(day, "EEE")}</div>
               <div className="text-[#a5a5a5]">{format(day, "dd MMM")}</div>
+              <div className="mt-1 font-medium tabular-nums text-[#D0FF00]">
+                {formatTrackedDuration(dailyTrackedSeconds[dayIndex])}
+              </div>
             </div>
           ))}
 
@@ -421,6 +784,20 @@ export function WeekCalendar({
                 />
               ))}
 
+              {dayIndex === todayIndex && (
+                <div
+                  className="pointer-events-none absolute inset-x-0 z-30 flex items-center"
+                  style={{ top: `${(nowMinutes / 60) * SLOT_HEIGHT}px` }}
+                  aria-hidden="true"
+                >
+                  <div className="-ml-1 size-2.5 shrink-0 rounded-full bg-[#D0FF00] shadow-[0_0_8px_rgba(208,255,0,0.65)]" />
+                  <div className="h-px flex-1 bg-[#D0FF00]" />
+                  <div className="mr-1 rounded bg-[#D0FF00] px-1 py-0.5 text-[9px] font-semibold tabular-nums text-[#202609]">
+                    {format(now, "HH:mm")}
+                  </div>
+                </div>
+              )}
+
               {(() => {
                 const dayEntries = logs
                   .map((entry) => ({ entry, display: getDisplayForEntry(entry) }))
@@ -444,7 +821,7 @@ export function WeekCalendar({
                   return (
                     <div
                       key={entry.id}
-                      className="absolute rounded-[8px] border border-[#D0FF00] bg-[#2f3716] p-1 text-[10px]"
+                      className="absolute overflow-hidden rounded-[8px] border border-[#D0FF00] bg-[#2f3716] p-1 text-[10px]"
                       style={{
                         top,
                         height,
@@ -469,25 +846,29 @@ export function WeekCalendar({
                           : (event) => beginGesture(event, entry, "move")
                       }
                     >
-                      <div className="mb-1 flex items-center justify-between gap-1">
+                      <div className="pointer-events-none mb-1 flex items-center justify-between gap-1 overflow-hidden">
                         <span className="truncate font-semibold" style={{ color: entry.categoryColor }}>
                           {entry.categoryName}
                         </span>
                         {entry.isRunning ? (
-                          <form action={stopTimerAction} onClick={(event) => event.stopPropagation()}>
-                            <input type="hidden" name="logId" value={entry.id} />
-                            <button className="text-[#FF5C5C]" type="submit">
-                              <Square className="size-3 fill-current" />
-                            </button>
-                          </form>
+                          <button
+                            className="pointer-events-auto text-[#FF5C5C]"
+                            type="button"
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              stopTimer.mutate({ logId: entry.id });
+                            }}
+                          >
+                            <Square className="size-3 fill-current" />
+                          </button>
                         ) : (
-                          <span className="text-[#9b9b9b]">
+                          <span className="shrink-0 text-[#9b9b9b]">
                             {format(addMinutes(startOfDay(weekDays[display.dayIndex]), display.endMinutes), "HH:mm")}
                           </span>
                         )}
                       </div>
-                      <div className="truncate text-[#f1f1f1]">{entry.title || "Untitled"}</div>
-                      <div className="text-[#bbbbbb]">
+                      <div className="pointer-events-none truncate text-[#f1f1f1]">{entry.title || "Untitled"}</div>
+                      <div className="pointer-events-none truncate text-[#bbbbbb]">
                         {format(addMinutes(startOfDay(weekDays[display.dayIndex]), display.startMinutes), "HH:mm")}{" "}
                         {entry.isRunning
                           ? "• running"
@@ -497,18 +878,18 @@ export function WeekCalendar({
                       {!entry.isRunning && (
                         <>
                           <div
-                            className="absolute inset-x-0 top-0 h-2"
+                            className="absolute inset-x-0 top-0 z-20 h-2"
                             style={{ cursor: "ns-resize", touchAction: "none", userSelect: "none", WebkitUserSelect: "none" }}
                             onPointerDown={(event) => beginGesture(event, entry, "resize-top")}
                           />
                           <div
-                            className="absolute inset-x-0 bottom-0 h-2"
+                            className="absolute inset-x-0 bottom-0 z-20 h-2"
                             style={{ cursor: "ns-resize", touchAction: "none", userSelect: "none", WebkitUserSelect: "none" }}
                             onPointerDown={(event) => beginGesture(event, entry, "resize-bottom")}
                           />
                         </>
                       )}
-                      {isDragging && <div className="pointer-events-none absolute inset-0 rounded-[8px] ring-2 ring-[#D0FF00]" />}
+                      {isDragging && <div className="pointer-events-none absolute inset-0 rounded-[8px] ring-2 ring-inset ring-[#D0FF00]" />}
                     </div>
                   );
                 });
@@ -525,6 +906,20 @@ export function WeekCalendar({
         onOpenChange={(nextOpen) => {
           if (!nextOpen) setEditingLogId(null);
         }}
+        onSave={(values) => {
+          if (values.isRunning) {
+            updateRunningLog.mutate({ id: values.id, categoryId: values.categoryId, title: values.title });
+          } else {
+            updateLog.mutate({
+              id: values.id,
+              categoryId: values.categoryId,
+              title: values.title,
+              startedAt: values.startedAt!,
+              endedAt: values.endedAt!,
+            });
+          }
+        }}
+        onDelete={(id) => deleteLog.mutate({ id })}
       />
     </div>
   );
