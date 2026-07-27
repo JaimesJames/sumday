@@ -1,6 +1,15 @@
 "use client";
 
-import { addDays, addMinutes, differenceInMinutes, differenceInSeconds, endOfWeek, format, startOfDay } from "date-fns";
+import {
+  addDays,
+  addMinutes,
+  differenceInMinutes,
+  differenceInSeconds,
+  endOfWeek,
+  format,
+  isSameDay,
+  startOfDay,
+} from "date-fns";
 import { Plus, Square } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
@@ -73,6 +82,16 @@ function snapMinutes(raw: number) {
 function yToMinutes(offsetY: number) {
   const raw = (offsetY / SLOT_HEIGHT) * 60;
   return clamp(snapMinutes(raw), 0, 1440);
+}
+
+function formatTrackedDuration(totalSeconds: number) {
+  const totalMinutes = Math.round(totalSeconds / 60);
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+
+  if (hours === 0) return `${minutes}m`;
+  if (minutes === 0) return `${hours}h`;
+  return `${hours}h ${minutes}m`;
 }
 
 function xToDayIndex(clientX: number, columnRects: (DOMRect | null)[], fallback: number) {
@@ -181,6 +200,9 @@ export function WeekCalendar({ weekStartIso }: { weekStartIso: string }) {
   const gestureRef = useRef<Gesture | null>(null);
   const dayColRefs = useRef<(HTMLDivElement | null)[]>([]);
   const gestureCleanupRef = useRef<(() => void) | null>(null);
+  const calendarScrollRef = useRef<HTMLDivElement | null>(null);
+  const hasAutoScrolledRef = useRef(false);
+  const [now, setNow] = useState(() => new Date());
 
   const weekStart = useMemo(() => new Date(weekStartIso), [weekStartIso]);
   const weekEnd = useMemo(() => endOfWeek(weekStart, { weekStartsOn: 1 }), [weekStart]);
@@ -278,6 +300,12 @@ export function WeekCalendar({ weekStartIso }: { weekStartIso: string }) {
           categoryColor: category?.color ?? null,
         })),
       );
+      // Keep the final drag/resize draft rendered until the optimistic cache
+      // contains the same position. Clearing it before the awaited query
+      // cancellation finishes briefly reveals the stale cached position.
+      if (draftRef.current?.id === input.id) {
+        updateDraft(null);
+      }
       return { previous };
     },
     onError: (error, _input, context) => {
@@ -355,7 +383,69 @@ export function WeekCalendar({ weekStartIso }: { weekStartIso: string }) {
     };
   }, []);
 
-  const now = new Date();
+  useEffect(() => {
+    const updateNow = () => setNow(new Date());
+    updateNow();
+    const interval = window.setInterval(updateNow, 30_000);
+    return () => window.clearInterval(interval);
+  }, []);
+
+  const todayIndex = weekDays.findIndex((day) => isSameDay(day, now));
+  const nowMinutes = differenceInMinutes(now, startOfDay(now));
+
+  useEffect(() => {
+    if (todayIndex === -1 || hasAutoScrolledRef.current) return;
+    const scrollContainer = calendarScrollRef.current;
+    if (!scrollContainer) return;
+
+    const targetTop = (nowMinutes / 60) * SLOT_HEIGHT - scrollContainer.clientHeight / 3;
+    scrollContainer.scrollTop = Math.max(0, targetTop);
+    hasAutoScrolledRef.current = true;
+  }, [nowMinutes, todayIndex]);
+
+  const dailyTrackedSeconds = useMemo(
+    () =>
+      weekDays.map((day) => {
+        const dayStartMs = startOfDay(day).getTime();
+        const dayEndMs = addDays(startOfDay(day), 1).getTime();
+
+        return logs.reduce((total, entry) => {
+          const entryStartMs = new Date(entry.startedAt).getTime();
+          const entryEndMs = entry.endedAt ? new Date(entry.endedAt).getTime() : now.getTime();
+          const overlapStartMs = Math.max(entryStartMs, dayStartMs);
+          const overlapEndMs = Math.min(entryEndMs, dayEndMs);
+          return total + Math.max(0, Math.floor((overlapEndMs - overlapStartMs) / 1000));
+        }, 0);
+      }),
+    [logs, now, weekDays],
+  );
+  const weekTrackedSeconds = dailyTrackedSeconds.reduce((total, seconds) => total + seconds, 0);
+  const weeklyCategoryBreakdown = useMemo(() => {
+    const weekStartMs = startOfDay(weekDays[0]).getTime();
+    const weekEndMs = addDays(startOfDay(weekDays[6]), 1).getTime();
+    const categoryTotals = new Map<string, { name: string; color: string; seconds: number }>();
+
+    for (const entry of logs) {
+      const entryStartMs = new Date(entry.startedAt).getTime();
+      const entryEndMs = entry.endedAt ? new Date(entry.endedAt).getTime() : now.getTime();
+      const overlapStartMs = Math.max(entryStartMs, weekStartMs);
+      const overlapEndMs = Math.min(entryEndMs, weekEndMs);
+      const seconds = Math.max(0, Math.floor((overlapEndMs - overlapStartMs) / 1000));
+      if (seconds === 0) continue;
+
+      const key = entry.categoryId ?? "uncategorized";
+      const current = categoryTotals.get(key);
+      categoryTotals.set(key, {
+        name: entry.categoryId ? entry.categoryName : "No category",
+        color: entry.categoryId ? entry.categoryColor : "#7f7f7f",
+        seconds: (current?.seconds ?? 0) + seconds,
+      });
+    }
+
+    return [...categoryTotals.entries()]
+      .map(([id, category]) => ({ id, ...category }))
+      .sort((a, b) => b.seconds - a.seconds);
+  }, [logs, now, weekDays]);
 
   const editingLog = logs.find((entry) => entry.id === editingLogId) ?? null;
 
@@ -494,7 +584,6 @@ export function WeekCalendar({ weekStartIso }: { weekStartIso: string }) {
       }
 
       const { dayIndex, startMinutes, endMinutes } = finalDraft;
-      updateDraft(null);
       commitLogChange(gesture.entry, dayIndex, startMinutes, endMinutes);
     }
 
@@ -506,8 +595,44 @@ export function WeekCalendar({ weekStartIso }: { weekStartIso: string }) {
 
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-4">
-      <div className="flex items-center justify-end">
-        <Dialog open={open} onOpenChange={setOpen}>
+      <div className="relative">
+        <div className="w-full">
+          <div className="text-xs uppercase tracking-[0.16em] text-[#9f9f9f]">This week</div>
+          <div className="text-xl font-semibold tabular-nums text-[#f1f1f1]">
+            {formatTrackedDuration(weekTrackedSeconds)}
+            <span className="ml-2 text-xs font-normal text-[#9f9f9f]">logged</span>
+          </div>
+          <div
+            className="mt-2 flex h-2 w-full rounded-full bg-[#3a3a3a]"
+            role="list"
+            aria-label="Weekly time by category"
+          >
+            {weeklyCategoryBreakdown.map((category, index) => {
+              const percentage = weekTrackedSeconds > 0 ? (category.seconds / weekTrackedSeconds) * 100 : 0;
+              return (
+                <div
+                  key={category.id}
+                  className={`group/segment relative h-full min-w-[3px] outline-none ring-inset focus-visible:ring-2 focus-visible:ring-white ${
+                    index === 0 ? "rounded-l-full" : ""
+                  } ${index === weeklyCategoryBreakdown.length - 1 ? "rounded-r-full" : ""}`}
+                  style={{ width: `${percentage}%`, backgroundColor: category.color }}
+                  role="listitem"
+                  tabIndex={0}
+                  aria-label={`${category.name}: ${formatTrackedDuration(category.seconds)}, ${percentage.toFixed(1)}%`}
+                >
+                  <div className="pointer-events-none absolute bottom-[calc(100%+8px)] left-1/2 z-50 hidden -translate-x-1/2 whitespace-nowrap rounded-[8px] border border-[#454545] bg-[#202020] px-2.5 py-1.5 text-left text-[11px] text-[#f1f1f1] shadow-xl group-hover/segment:block group-focus-visible/segment:block">
+                    <div className="font-semibold">{category.name}</div>
+                    <div className="tabular-nums text-[#bdbdbd]">
+                      {formatTrackedDuration(category.seconds)} · {percentage.toFixed(1)}%
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+        <div className="absolute right-0 top-0">
+          <Dialog open={open} onOpenChange={setOpen}>
           <DialogTrigger render={<Button className="rounded-[8px] bg-[#D0FF00] text-[#202609] hover:bg-[#D0FF00]/90" />}>
             <Plus className="size-4" />
             Add slot
@@ -599,19 +724,29 @@ export function WeekCalendar({ weekStartIso }: { weekStartIso: string }) {
               </Button>
             </DialogFooter>
           </DialogContent>
-        </Dialog>
+          </Dialog>
+        </div>
       </div>
 
       <div
+        ref={calendarScrollRef}
         className="min-h-0 flex-1 overflow-auto rounded-[12px] border border-[#3a3a3a]"
         style={draft ? { userSelect: "none", WebkitUserSelect: "none" } : undefined}
       >
         <div className="grid min-w-[980px]" style={{ gridTemplateColumns: "70px repeat(7, minmax(0,1fr))" }}>
-          <div className="border-r border-[#3f3f3f]" />
-          {weekDays.map((day) => (
-            <div key={day.toISOString()} className="border-r border-[#3f3f3f] p-2 text-center text-xs last:border-r-0">
+          <div className="sticky top-0 z-40 border-r border-b border-[#3f3f3f] bg-[#2B2B2B]" />
+          {weekDays.map((day, dayIndex) => (
+            <div
+              key={day.toISOString()}
+              className={`sticky top-0 z-40 border-r border-b border-[#3f3f3f] p-2 text-center text-xs last:border-r-0 ${
+                dayIndex === todayIndex ? "bg-[#31351f]" : "bg-[#2B2B2B]"
+              }`}
+            >
               <div className="text-[#f1f1f1]">{format(day, "EEE")}</div>
               <div className="text-[#a5a5a5]">{format(day, "dd MMM")}</div>
+              <div className="mt-1 font-medium tabular-nums text-[#D0FF00]">
+                {formatTrackedDuration(dailyTrackedSeconds[dayIndex])}
+              </div>
             </div>
           ))}
 
@@ -649,6 +784,20 @@ export function WeekCalendar({ weekStartIso }: { weekStartIso: string }) {
                 />
               ))}
 
+              {dayIndex === todayIndex && (
+                <div
+                  className="pointer-events-none absolute inset-x-0 z-30 flex items-center"
+                  style={{ top: `${(nowMinutes / 60) * SLOT_HEIGHT}px` }}
+                  aria-hidden="true"
+                >
+                  <div className="-ml-1 size-2.5 shrink-0 rounded-full bg-[#D0FF00] shadow-[0_0_8px_rgba(208,255,0,0.65)]" />
+                  <div className="h-px flex-1 bg-[#D0FF00]" />
+                  <div className="mr-1 rounded bg-[#D0FF00] px-1 py-0.5 text-[9px] font-semibold tabular-nums text-[#202609]">
+                    {format(now, "HH:mm")}
+                  </div>
+                </div>
+              )}
+
               {(() => {
                 const dayEntries = logs
                   .map((entry) => ({ entry, display: getDisplayForEntry(entry) }))
@@ -672,7 +821,7 @@ export function WeekCalendar({ weekStartIso }: { weekStartIso: string }) {
                   return (
                     <div
                       key={entry.id}
-                      className="absolute rounded-[8px] border border-[#D0FF00] bg-[#2f3716] p-1 text-[10px]"
+                      className="absolute overflow-hidden rounded-[8px] border border-[#D0FF00] bg-[#2f3716] p-1 text-[10px]"
                       style={{
                         top,
                         height,
@@ -697,13 +846,13 @@ export function WeekCalendar({ weekStartIso }: { weekStartIso: string }) {
                           : (event) => beginGesture(event, entry, "move")
                       }
                     >
-                      <div className="mb-1 flex items-center justify-between gap-1">
+                      <div className="pointer-events-none mb-1 flex items-center justify-between gap-1 overflow-hidden">
                         <span className="truncate font-semibold" style={{ color: entry.categoryColor }}>
                           {entry.categoryName}
                         </span>
                         {entry.isRunning ? (
                           <button
-                            className="text-[#FF5C5C]"
+                            className="pointer-events-auto text-[#FF5C5C]"
                             type="button"
                             onClick={(event) => {
                               event.stopPropagation();
@@ -713,13 +862,13 @@ export function WeekCalendar({ weekStartIso }: { weekStartIso: string }) {
                             <Square className="size-3 fill-current" />
                           </button>
                         ) : (
-                          <span className="text-[#9b9b9b]">
+                          <span className="shrink-0 text-[#9b9b9b]">
                             {format(addMinutes(startOfDay(weekDays[display.dayIndex]), display.endMinutes), "HH:mm")}
                           </span>
                         )}
                       </div>
-                      <div className="truncate text-[#f1f1f1]">{entry.title || "Untitled"}</div>
-                      <div className="text-[#bbbbbb]">
+                      <div className="pointer-events-none truncate text-[#f1f1f1]">{entry.title || "Untitled"}</div>
+                      <div className="pointer-events-none truncate text-[#bbbbbb]">
                         {format(addMinutes(startOfDay(weekDays[display.dayIndex]), display.startMinutes), "HH:mm")}{" "}
                         {entry.isRunning
                           ? "• running"
@@ -729,18 +878,18 @@ export function WeekCalendar({ weekStartIso }: { weekStartIso: string }) {
                       {!entry.isRunning && (
                         <>
                           <div
-                            className="absolute inset-x-0 top-0 h-2"
+                            className="absolute inset-x-0 top-0 z-20 h-2"
                             style={{ cursor: "ns-resize", touchAction: "none", userSelect: "none", WebkitUserSelect: "none" }}
                             onPointerDown={(event) => beginGesture(event, entry, "resize-top")}
                           />
                           <div
-                            className="absolute inset-x-0 bottom-0 h-2"
+                            className="absolute inset-x-0 bottom-0 z-20 h-2"
                             style={{ cursor: "ns-resize", touchAction: "none", userSelect: "none", WebkitUserSelect: "none" }}
                             onPointerDown={(event) => beginGesture(event, entry, "resize-bottom")}
                           />
                         </>
                       )}
-                      {isDragging && <div className="pointer-events-none absolute inset-0 rounded-[8px] ring-2 ring-[#D0FF00]" />}
+                      {isDragging && <div className="pointer-events-none absolute inset-0 rounded-[8px] ring-2 ring-inset ring-[#D0FF00]" />}
                     </div>
                   );
                 });
